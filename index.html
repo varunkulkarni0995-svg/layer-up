@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#EEF1EE">
+<meta name="description" content="What to wear in NYC today, based on how the weather feels and how you handle the cold.">
+<title>Layer Up NYC</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=Archivo+Narrow:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <main id="screen" aria-live="polite"></main>
+  <nav class="tabs" aria-label="Sections">
+    <button type="button" data-tab="today" aria-current="page"><span class="bar"></span>Today</button>
+    <button type="button" data-tab="trip"><span class="bar"></span>Trip</button>
+    <button type="button" data-tab="ask"><span class="bar"></span>Ask</button>
+    <button type="button" data-tab="settings"><span class="bar"></span>Settings</button>
+  </nav>
+</div>
+<div id="sheet-root"></div>
+<script type="module" src="src/app.js"></script>
+<noscript><p style="padding:24px">Layer Up needs JavaScript turned on.</p></noscript>
+</body>
+</html>
