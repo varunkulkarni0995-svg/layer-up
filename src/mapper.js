@@ -7,13 +7,12 @@
 export const ACTIVITIES = {
   class:  { label: 'Class',  feelsAdj: 3,  overheatRisk: 0.8, exposed: true,  shed: 'Take the outer layer off in class' },
   walk:   { label: 'Walk',   feelsAdj: 0,  overheatRisk: 0,   exposed: true },
-  smoke:  { label: 'Smoke',  feelsAdj: -2, overheatRisk: 0,   exposed: true },
   subway: { label: 'Subway', feelsAdj: 2,  overheatRisk: 0.6, exposed: true,  shed: 'Take the outer layer off on the train' },
   run:    { label: 'Run',    feelsAdj: 8,  overheatRisk: 1.2, exposed: true,  noUmbrella: true, shed: "You'll warm up fast: start a little cool" },
   bike:   { label: 'Bike',   feelsAdj: -3, overheatRisk: 0.2, exposed: true,  noUmbrella: true },
   inside: { label: 'Inside', feelsAdj: 4,  overheatRisk: 0.8, exposed: false, shed: 'Take the outer layer off indoors' }
 };
-export const DEFAULT_ACTIVITIES = ['class', 'walk', 'smoke', 'subway', 'run'];
+export const DEFAULT_ACTIVITIES = ['class', 'walk', 'subway', 'run'];
 
 export const OCCASIONS = {
   casual:   { label: 'Casual',   minDressy: 0 },
@@ -141,7 +140,6 @@ export function recommend({ hours, activity = 'walk', occasion = 'casual', toler
   if (extras.length && firstExtras && firstExtras !== perHour[0]) notes.push(`Add ${extras.map(e => e.name.toLowerCase()).join(' + ')} from ${firstExtras.time}`);
   else if (extras.length) notes.push(`Wear ${extras.map(e => e.name.toLowerCase()).join(' + ')}`);
   if (act.shed && best.outer) notes.push(act.shed);
-  if (activity === 'smoke' && minFeels < 12) notes.push('Standing still feels colder: zip up');
   if (windy) notes.push(`Windy (up to ${Math.round(maxWind)} km/h)`);
   if (best.under > 1.5) notes.push('Warmest combo you own is still a little light');
 
