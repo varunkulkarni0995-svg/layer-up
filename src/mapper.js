@@ -1,13 +1,19 @@
 // Layer Up mapper: weather + how you travel + occasion + tolerance + wardrobe → outfit.
 // Pure functions, no network, no UI. Same input always gives the same answer.
 
+// Activity library. Users pick which ones they see (Settings); the rest stay available for later.
+// feelsAdj: how the activity changes what you feel (°C). overheatRisk: extra cost of being overdressed.
+// noUmbrella: hands not free, so rain needs a water-resistant outer instead. shed: tip when an outer layer comes off.
 export const ACTIVITIES = {
-  // feelsAdj: how the trip changes what you feel (°C). overheatRisk: extra cost of being overdressed.
-  walk:   { label: 'Walking',        feelsAdj: 0,  overheatRisk: 0,   exposed: true  },
-  subway: { label: 'Subway',         feelsAdj: 2,  overheatRisk: 0.6, exposed: true  },
-  bike:   { label: 'Biking',         feelsAdj: -3, overheatRisk: 0.2, exposed: true  },
-  inside: { label: 'Mostly inside',  feelsAdj: 4,  overheatRisk: 0.8, exposed: false }
+  class:  { label: 'Class',  feelsAdj: 3,  overheatRisk: 0.8, exposed: true,  shed: 'Take the outer layer off in class' },
+  walk:   { label: 'Walk',   feelsAdj: 0,  overheatRisk: 0,   exposed: true },
+  smoke:  { label: 'Smoke',  feelsAdj: -2, overheatRisk: 0,   exposed: true },
+  subway: { label: 'Subway', feelsAdj: 2,  overheatRisk: 0.6, exposed: true,  shed: 'Take the outer layer off on the train' },
+  run:    { label: 'Run',    feelsAdj: 8,  overheatRisk: 1.2, exposed: true,  noUmbrella: true, shed: "You'll warm up fast: start a little cool" },
+  bike:   { label: 'Bike',   feelsAdj: -3, overheatRisk: 0.2, exposed: true,  noUmbrella: true },
+  inside: { label: 'Inside', feelsAdj: 4,  overheatRisk: 0.8, exposed: false, shed: 'Take the outer layer off indoors' }
 };
+export const DEFAULT_ACTIVITIES = ['class', 'walk', 'smoke', 'subway', 'run'];
 
 export const OCCASIONS = {
   casual:   { label: 'Casual',   minDressy: 0 },
@@ -100,7 +106,7 @@ export function recommend({ hours, activity = 'walk', occasion = 'casual', toler
     if (occ.minDressy && (visible.dressy ?? 0) < occ.minDressy) continue;
     if (dressyOccasion && mid && (mid.dressy ?? 0) < 4) continue;          // no hoodie under the nice jacket at dinner
     if (base.id === 'thermals' && !thermalsOk) continue;
-    if (rainy && activity === 'bike' && (!outer || outer.water < 0.5)) continue; // can't hold an umbrella on a bike
+    if (rainy && act.noUmbrella && (!outer || outer.water < 0.5)) continue; // can't hold an umbrella on a bike or a run
     if (windy && need > 6 && (!outer || outer.wind < 0.5)) continue;
 
     const warmth = base.warmth + (mid?.warmth || 0) + (outer?.warmth || 0) + extrasWarmth;
@@ -134,11 +140,12 @@ export function recommend({ hours, activity = 'walk', occasion = 'casual', toler
   const notes = [];
   if (extras.length && firstExtras && firstExtras !== perHour[0]) notes.push(`Add ${extras.map(e => e.name.toLowerCase()).join(' + ')} from ${firstExtras.time}`);
   else if (extras.length) notes.push(`Wear ${extras.map(e => e.name.toLowerCase()).join(' + ')}`);
-  if (act.overheatRisk >= 0.6 && best.outer) notes.push('Take the outer layer off on the train or indoors');
+  if (act.shed && best.outer) notes.push(act.shed);
+  if (activity === 'smoke' && minFeels < 12) notes.push('Standing still feels colder: zip up');
   if (windy) notes.push(`Windy (up to ${Math.round(maxWind)} km/h)`);
   if (best.under > 1.5) notes.push('Warmest combo you own is still a little light');
 
-  const umbrella = rainy && activity !== 'bike';
+  const umbrella = rainy && !act.noUmbrella;
   return {
     title,
     outfit: { base: best.base.id, mid: best.mid?.id || null, outer: best.outer?.id || null, head: head?.id || null, hands: hands?.id || null },

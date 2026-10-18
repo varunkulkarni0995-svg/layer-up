@@ -144,3 +144,25 @@ test('rejects empty weather or wardrobe', () => {
   assert.throws(() => recommend({ hours: [], wardrobe: W }));
   assert.throws(() => recommend({ hours: [H(5)], wardrobe: [] }));
 });
+
+// ---------- New activities ----------
+test('default activity list is Class, Walk, Smoke, Subway, Run', async () => {
+  const { DEFAULT_ACTIVITIES, ACTIVITIES } = await import('../src/mapper.js');
+  assert.deepEqual(DEFAULT_ACTIVITIES, ['class', 'walk', 'smoke', 'subway', 'run']);
+  DEFAULT_ACTIVITIES.forEach(a => assert.ok(ACTIVITIES[a], a));
+});
+test('run at 6°: much lighter than walking, no umbrella in rain', () => {
+  const run = rec([H(6)], { activity: 'run' }), walk = rec([H(6)]);
+  assert.ok(run.warmth < walk.warmth, `run ${run.warmth} vs walk ${walk.warmth}`);
+  assert.equal(rec([H(10, { rain: 50 })], { activity: 'run' }).umbrella, false);
+});
+test('smoke break at 8°: colder than walking, zip-up tip', () => {
+  const smoke = rec([H(8)], { activity: 'smoke' }), walk = rec([H(8)]);
+  assert.ok(smoke.warmth >= walk.warmth);
+  assert.ok(smoke.notes.some(n => n.includes('Standing still')));
+});
+test('class at 8°: lighter than walking, take-it-off tip', () => {
+  const cls = rec([H(8)], { activity: 'class' });
+  assert.ok(cls.warmth <= rec([H(8)]).warmth);
+  if (cls.outfit.outer) assert.ok(cls.notes.some(n => n.includes('in class')));
+});

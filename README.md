@@ -6,7 +6,7 @@ What to wear today, based on how the weather **feels**, how you're getting aroun
 
 | Milestone | Scope | Status |
 |---|---|---|
-| 1 | Mapper, live weather, device location, Today / Trip / Settings | Done |
+| 1 | Mapper, live weather, device location, Outfit / Trip / Settings | Done |
 | 2 | Supabase: Google login (owner only), profile + wardrobe sync, 10-day activity log | Next |
 | 3 | Ask chat via Supabase Edge Function + Gemini, unlocked with a passkey (Face ID / Touch ID) | Planned |
 
@@ -38,7 +38,7 @@ Location access needs `https` or `localhost`.
 ## Tests
 
 ```
-npm test        # 54 unit tests: mapper, weather, location, settings
+npm test        # 61 unit tests: mapper, weather, location, settings
 ```
 
 ## Data

@@ -60,3 +60,27 @@ test('recent places dedupe and cap at 5', () => {
   assert.equal(s.places[0].name, 'P3 again');
   assert.equal(s.places.filter(p => p.lat === 43).length, 1);
 });
+
+test('parks and addresses fall back to OpenStreetMap search', async () => {
+  const calls = [];
+  const fetchFn = async url => {
+    calls.push(url);
+    if (url.includes('geocoding-api')) return { ok: true, status: 200, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => ([{ name: 'Brooklyn Bridge Park', display_name: 'Brooklyn Bridge Park, Brooklyn, New York', lat: '40.7003', lon: '-73.9967', address: { suburb: 'Brooklyn', city: 'New York', state: 'New York', country_code: 'us' } }]) };
+  };
+  const r = await searchPlaces('Brooklyn Bridge Park', fetchFn);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(r, [{ name: 'Brooklyn Bridge Park', detail: 'Brooklyn, New York, New York', lat: 40.7003, lon: -73.9967 }]);
+});
+test('label skips admin areas like "Community Board"', async () => {
+  const label = await placeLabel(40.75, -73.99, json({ address: { suburb: 'Manhattan Community Board 5', neighbourhood: 'Koreatown', city: 'New York' } }));
+  assert.equal(label, 'Koreatown');
+  const label2 = await placeLabel(40.75, -73.99, json({ address: { suburb: 'Manhattan Community Board 5', city: 'New York' } }));
+  assert.equal(label2, 'New York');
+});
+test('saved activity list is cleaned up', () => {
+  const mem = new Map([['layerup.settings.v1', JSON.stringify({ activity: 'bike', activities: ['walk', 'nonsense', 'run'] })]]);
+  const s = loadSettings({ getItem: k => mem.get(k) ?? null, setItem() {} });
+  assert.deepEqual(s.activities, ['walk', 'run']);
+  assert.equal(s.activity, 'walk');
+});

@@ -23,12 +23,15 @@ const U = () => state.settings.units;
 const toUnit = c => (U().temp === 'F' ? c * 9 / 5 + 32 : c);
 const fmtT = c => (c == null ? '–' : Math.round(toUnit(c)) + '°');
 const fmtTU = c => (c == null ? '–' : Math.round(toUnit(c)) + (U().temp === 'F' ? '°F' : '°C'));
+const fmtRange = (a, b) => { const x = Math.round(toUnit(a)), y = Math.round(toUnit(b)); return x === y ? x + '°' : `${Math.min(x, y)}–${Math.max(x, y)}°`; };
 const fmtDiff = d => Math.round(U().temp === 'F' ? d * 9 / 5 : d);
 const fmtWind = k => (k == null ? '–' : U().wind === 'mph' ? Math.round(k / 1.609) + ' mph' : Math.round(k) + ' km/h');
 const fmtHour = h => (U().time === '24' ? String(h).padStart(2, '0') + ':00' : (h % 12 || 12) + (h < 12 ? ' AM' : ' PM'));
 const ago = ms => { const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? 'Just now' : m === 1 ? '1 min ago' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
 const itemName = id => state.settings.wardrobe.find(i => i.id === id)?.name || '';
 const toMapperHours = hrs => hrs.map(h => ({ time: fmtHour(h.hour), feelsC: h.feelsC, windKmh: h.windKmh, rainProb: h.rainProb }));
+const activityButtons = (current, action) => state.settings.activities.filter(k => ACTIVITIES[k])
+  .map(k => `<button type="button" aria-pressed="${current === k}" data-action="${action}" data-v="${k}">${ACTIVITIES[k].label}</button>`).join('');
 
 function save() { saveSettings(state.settings); }
 function toast(msg) {
@@ -105,23 +108,32 @@ function renderToday() {
   if (!s.forecast) return head + note + `<div class="skeleton" style="height:120px"></div><div class="skeleton" style="height:96px"></div><div class="skeleton" style="height:230px"></div>`;
 
   const { f, up, restOfDayEnd, quick } = todayModel();
-  const cur = f.current || up[0];
-  const rainNow = up[0]?.rainProb ?? 0;
+  const sel = s.sel;
+  // Top section follows the selection: one hour → that hour; a window → its coldest hour; nothing → right now.
+  let cur, heroWhen, rainNow, ranges = null;
+  if (!sel) { cur = f.current || up[0]; heroWhen = 'Now'; rainNow = up[0]?.rainProb ?? 0; }
+  else {
+    const win = up.slice(sel[0], sel[1] + 1);
+    cur = win.reduce((m, h) => (h.feelsC < m.feelsC ? h : m), win[0]);
+    rainNow = Math.max(...win.map(h => h.rainProb));
+    const name = i => (i === 0 ? 'Now' : fmtHour(up[i].hour));
+    heroWhen = sel[0] === sel[1] ? name(sel[0]) : `${name(sel[0])}–${fmtHour(up[sel[1]].hour)}, coldest ${fmtHour(cur.hour)}`;
+    if (sel[0] !== sel[1]) ranges = { tMin: Math.min(...win.map(h => h.tempC)), tMax: Math.max(...win.map(h => h.tempC)), wMax: Math.max(...win.map(h => h.windKmh)) };
+  }
   const cond = describeCode(cur.code).text;
   const d = cur.feelsC - cur.tempC;
   const delta = d <= -3 ? (cur.windKmh >= 15 ? `Wind makes it feel ${Math.abs(fmtDiff(d))}° colder than it is.` : `Feels ${Math.abs(fmtDiff(d))}° colder than it is.`)
     : d >= 3 ? `Feels ${fmtDiff(d)}° warmer than it is.` : '';
   const err = s.error ? `<div class="banner err" role="alert"><span>${esc(s.error)} Showing the last forecast.</span></div>` : '';
 
-  const sel = s.sel;
   const strip = up.slice(0, 12).map((h, i) => {
     const on = sel && i >= sel[0] && i <= sel[1];
-    return `<button type="button" class="hour${i === 0 ? ' now' : ''}" data-action="pick-hour" data-i="${i}" aria-pressed="${!!on}" aria-label="${i === 0 ? 'Now' : fmtHour(h.hour)}, feels ${fmtT(h.feelsC)}">
+    return `<button type="button" class="hour" data-action="pick-hour" data-i="${i}" aria-pressed="${!!on}" aria-label="${i === 0 ? 'Now' : fmtHour(h.hour)}, feels ${fmtT(h.feelsC)}">
       <span class="t">${i === 0 ? 'Now' : fmtHour(h.hour)}</span><span class="f">${fmtT(h.feelsC)}</span><span class="a">${fmtT(h.tempC)}</span><span class="r">${h.rainProb >= 10 ? h.rainProb + '%' : ''}</span></button>`;
   }).join('');
   const hint = !sel ? 'tap an hour, then another' : sel[0] === sel[1] ? 'tap a 2nd hour' : '';
   const chips = quick.map(([label, a, b]) => `<button type="button" class="chip" data-action="quick" data-a="${a}" data-b="${b}" aria-pressed="${!!(sel && sel[0] === a && sel[1] === b)}">${esc(label)}</button>`).join('');
-  const acts = Object.entries(ACTIVITIES).map(([k, v]) => `<button type="button" aria-pressed="${s.settings.activity === k}" data-action="activity" data-v="${k}">${v.label.replace('Mostly inside', 'Inside')}</button>`).join('');
+  const acts = activityButtons(s.settings.activity, 'activity');
 
   // Window: selection, or rest of today (at least the next 6 hours late at night).
   let a = 0, b = restOfDayEnd >= 2 ? restOfDayEnd : Math.min(5, up.length - 1);
@@ -133,8 +145,11 @@ function renderToday() {
 
   return head + note + err + `
     <div class="hero">
-      <div><div class="eyebrow">Feels like${cond ? ' · ' + esc(cond) : ''}</div><div class="big">${fmtT(cur.feelsC)}</div></div>
-      <div class="facts"><div><span>Actual</span> <b>${fmtT(cur.tempC)}</b></div><div><span>Wind</span> <b>${fmtWind(cur.windKmh)}</b></div><div><span>Rain</span> <b>${rainNow}%</b></div></div>
+      <div><div class="eyebrow">Feels like · ${esc(heroWhen)}${cond ? ' · ' + esc(cond) : ''}</div><div class="big">${fmtT(cur.feelsC)}</div></div>
+      <div class="facts">
+        <div><span>Actual</span> <b>${ranges ? fmtRange(ranges.tMin, ranges.tMax) : fmtT(cur.tempC)}</b></div>
+        <div><span>Wind${ranges ? ' max' : ''}</span> <b>${fmtWind(ranges ? ranges.wMax : cur.windKmh)}</b></div>
+        <div><span>Rain${ranges ? ' max' : ''}</span> <b>${rainNow}%</b></div></div>
     </div>
     ${delta ? `<div class="delta">${delta}</div>` : ''}
     <section aria-label="Hourly forecast" style="display:flex;flex-direction:column;gap:8px">
@@ -143,8 +158,8 @@ function renderToday() {
       <div class="strip">${strip}</div>
       <div class="chips">${chips}</div>
     </section>
-    <div class="between"><span class="eyebrow">Getting around</span></div>
-    <div class="seg" role="group" aria-label="Getting around">${acts}</div>
+    <div class="between"><span class="eyebrow">What are you doing?</span></div>
+    <div class="seg" role="group" aria-label="Activity">${acts}</div>
     ${outfitCard(r, label, sub, sel ? win : null)}`;
 }
 
@@ -223,9 +238,10 @@ function renderTrip() {
   const nowH = new Date().getHours();
   const hour = t.hour ?? Math.min(23, nowH + 1);
   const hours = Array.from({ length: 24 }, (_, h) => h).filter(h => t.day > 0 || h >= nowH);
+  const hourSel = hours.includes(hour) ? hour : hours[0];
   const act = t.activity || s.activity;
   const occ = Object.entries(OCCASIONS).map(([k, v]) => `<button type="button" class="chip" data-action="trip-occ" data-v="${k}" aria-pressed="${t.occasion === k}">${v.label}</button>`).join('');
-  const acts = Object.entries(ACTIVITIES).map(([k, v]) => `<button type="button" aria-pressed="${act === k}" data-action="trip-act" data-v="${k}">${v.label.replace('Mostly inside', 'Inside')}</button>`).join('');
+  const acts = activityButtons(act, 'trip-act');
   let result = '';
   if (t.loading) result = '<div class="skeleton" style="height:240px"></div>';
   else if (t.error) result = `<div class="banner err" role="alert"><span>${esc(t.error)}</span></div>`;
@@ -234,7 +250,7 @@ function renderTrip() {
     const temps = win.map(h => h.tempC), feels = win.map(h => h.feelsC);
     const cond = describeCode(win[0].code).text;
     const label = `${place.name} · ${fmtHour(win[0].hour)}${win.length > 1 ? '–' + fmtHour(win[win.length - 1].hour) : ''}`;
-    const sub = `Feels ${fmtT(Math.min(...feels))}${Math.min(...feels) !== Math.max(...feels) ? ' to ' + fmtT(Math.max(...feels)) : ''} · actual ${fmtT(Math.min(...temps))}–${fmtT(Math.max(...temps))} · wind up to ${fmtWind(Math.max(...win.map(h => h.windKmh)))}${cond ? ' · ' + cond : ''}`;
+    const sub = `Feels ${fmtRange(Math.min(...feels), Math.max(...feels))} · actual ${fmtRange(Math.min(...temps), Math.max(...temps))} · wind max ${fmtWind(Math.max(...win.map(h => h.windKmh)))}${cond ? ' · ' + cond : ''}`;
     result = outfitCard(r, label, sub, win, false);
   }
   return `<h1>Plan a trip</h1>
@@ -244,21 +260,21 @@ function renderTrip() {
         <div class="list" id="tripResults"></div></div>
       <div class="row" style="gap:10px">
         <label class="field" style="flex:1">Day<select id="tripDay">${days.map(([i, l]) => `<option value="${i}" ${t.day === i ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
-        <label class="field" style="flex:1">Time<select id="tripHour">${hours.map(h => `<option value="${h}" ${h === hour ? 'selected' : ''}>${fmtHour(h)}</option>`).join('')}</select></label>
+        <label class="field" style="flex:1">Time<select id="tripHour">${hours.map(h => `<option value="${h}" ${h === hourSel ? 'selected' : ''}>${fmtHour(h)}</option>`).join('')}</select></label>
         <label class="field" style="flex:1">Outside for<select id="tripDur">${[1, 2, 3, 4].map(n => `<option value="${n}" ${t.duration === n ? 'selected' : ''}>${n} h</option>`).join('')}</select></label>
       </div>
-      <div class="field">Getting there<div class="seg" role="group" aria-label="Getting there">${acts}</div></div>
+      <div class="field">Activity<div class="seg" role="group" aria-label="Activity">${acts}</div></div>
       <div class="field">Occasion<div class="chips">${occ}</div></div>
       <button type="submit" class="pill-btn primary" style="justify-content:center;min-height:46px;font-size:15px">Get outfit</button>
     </form>
-    ${result}`;
+    <div id="tripOut" style="scroll-margin-top:12px">${result}</div>`;
 }
 
 async function runTrip() {
   const t = state.trip;
   t.day = Number($('#tripDay').value); t.hour = Number($('#tripHour').value); t.duration = Number($('#tripDur').value);
-  if (!t.place) { t.error = 'Pick a place from the search results first.'; t.result = null; render(); return; }
-  t.loading = true; t.error = null; render();
+  if (!t.place) { t.error = 'Pick a place from the search results first.'; t.result = null; render(); showTripResult(); return; }
+  t.loading = true; t.error = null; render(); showTripResult();
   try {
     const f = await fetchForecast({ lat: t.place.lat, lon: t.place.lon, days: 7 });
     const base = localNowIso(f).slice(0, 10);
@@ -269,8 +285,12 @@ async function runTrip() {
     const r = recommend({ hours: toMapperHours(win), activity: t.activity || state.settings.activity, occasion: t.occasion, tolerance: state.settings.tolerance, wardrobe: state.settings.wardrobe });
     t.result = { r, win, place: t.place };
     state.settings = rememberPlace(state.settings, t.place); save();
-  } catch (e) { t.error = e.message; t.result = null; }
-  finally { t.loading = false; render(); }
+  } catch (e) { t.error = e.message || "Couldn't get the forecast for that place. Try again."; t.result = null; }
+  finally { t.loading = false; render(); showTripResult(); }
+}
+function showTripResult() {
+  const el = document.querySelector('#tripOut');
+  if (el) el.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
 }
 
 function wireTrip() {
@@ -290,6 +310,13 @@ function wireTrip() {
       } catch (e) { box.innerHTML = `<p class="hint">${esc(e.message)}</p>`; }
     }, 350);
   });
+  input.addEventListener('keydown', e => {
+    // Enter in the search box picks the first result instead of submitting an empty place.
+    if (e.key === 'Enter' && !state.trip.place && state._tripResults?.length && $('#tripResults button')) {
+      e.preventDefault(); $('#tripResults button').click();
+    }
+  });
+  $('#tripDay').addEventListener('change', () => { keepTripInputs(); render(); });
   $('#tripForm').addEventListener('submit', e => { e.preventDefault(); runTrip(); });
 }
 
@@ -309,7 +336,7 @@ function renderSettings() {
       <div class="ends"><span>${d.left}</span><span>${d.right}</span></div>
       <div class="effect" id="eff-${k}">${esc(d.effect(s.tolerance[k]))}</div></div>`).join('');
   const seg = (key, opts) => `<div class="seg" role="group" style="width:168px">${opts.map(([v, l]) => `<button type="button" data-action="unit" data-k="${key}" data-v="${v}" aria-pressed="${s.units[key] === v}">${l}</button>`).join('')}</div>`;
-  const acts = Object.entries(ACTIVITIES).map(([k, v]) => `<button type="button" aria-pressed="${s.activity === k}" data-action="activity" data-v="${k}">${v.label.replace('Mostly inside', 'Inside')}</button>`).join('');
+  const acts = activityButtons(s.activity, 'activity');
   const ward = s.wardrobe.filter(i => i.slot !== 'carry').map(i => `<div class="ward" data-item="${i.id}">
       <div class="between"><b>${esc(i.name)}</b><span class="hint">${esc(i.slot)}</span></div>
       <label class="sr" for="w-${i.id}">${esc(i.name)} warmth</label>
@@ -325,7 +352,7 @@ function renderSettings() {
       <div class="between"><b>Temperature</b>${seg('temp', [['C', '°C'], ['F', '°F']])}</div>
       <div class="between"><b>Wind</b>${seg('wind', [['kmh', 'km/h'], ['mph', 'mph']])}</div>
       <div class="between"><b>Time</b>${seg('time', [['12', '12-hour'], ['24', '24-hour']])}</div></section>
-    <section class="card"><div class="eyebrow">Usually getting around by</div><div class="seg" role="group" aria-label="Usually getting around by">${acts}</div></section>
+    <section class="card"><div class="eyebrow">Default activity</div><div class="seg" role="group" aria-label="Default activity">${acts}</div></section>
     <section class="card"><div class="between"><div class="eyebrow">My wardrobe · warmth 0–10</div><span class="hint">Umbrella: always in bag</span></div>${ward}</section>
     <section class="card"><div class="between"><span class="hint">Saved on this device. Login + sync come in milestone 2.</span>
       <button type="button" class="link" data-action="reset-all" id="resetAll" style="color:var(--bad)">Reset all</button></div></section>`;
@@ -398,7 +425,7 @@ document.addEventListener('click', e => {
     case 'unit': state.settings.units[el.dataset.k] = el.dataset.v; save(); render(); break;
     case 'trip-occ': state.trip.occasion = el.dataset.v; keepTripInputs(); render(); break;
     case 'trip-act': state.trip.activity = el.dataset.v; keepTripInputs(); render(); break;
-    case 'trip-place': { const p = state._tripResults[i]; state.trip.place = p; $('#tripWhere').value = p.name; $('#tripResults').innerHTML = ''; break; }
+    case 'trip-place': { const p = state._tripResults[i]; state.trip.place = p; state.trip.error = null; $('#tripWhere').value = p.name; $('#tripResults').innerHTML = `<p class="hint">✓ ${esc(p.name)}${p.detail ? ', ' + esc(p.detail) : ''}</p>`; break; }
     case 'reset-all':
       if (el.dataset.armed) { state.settings = JSON.parse(JSON.stringify({ ...DEFAULT_SETTINGS, places: state.settings.places, lastPlace: state.settings.lastPlace })); save(); render(); toast('Settings reset to defaults'); }
       else { el.dataset.armed = '1'; el.textContent = 'Tap again to reset'; setTimeout(() => { if (el.isConnected) { delete el.dataset.armed; el.textContent = 'Reset all'; } }, 3000); }

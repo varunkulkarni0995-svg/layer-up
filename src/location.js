@@ -32,19 +32,40 @@ export function getDeviceLocation({
   });
 }
 
-/** Place name → coordinates (Open-Meteo geocoding). */
+/**
+ * Place name → coordinates. Open-Meteo knows cities and neighbourhoods; parks, landmarks and
+ * street addresses fall back to OpenStreetMap (Nominatim).
+ */
 export async function searchPlaces(query, fetchFn = globalThis.fetch) {
   const q = String(query || '').trim();
   if (q.length < 2) return [];
-  const url = 'https://geocoding-api.open-meteo.com/v1/search?' + new URLSearchParams({ name: q, count: '6', language: 'en', format: 'json' });
+  let towns = [];
+  try {
+    const url = 'https://geocoding-api.open-meteo.com/v1/search?' + new URLSearchParams({ name: q, count: '6', language: 'en', format: 'json' });
+    const res = await fetchFn(url);
+    if (res.ok) {
+      towns = ((await res.json()).results || []).map(r => ({
+        name: r.name,
+        detail: [r.admin1, r.country_code === 'US' ? null : r.country].filter(Boolean).join(', '),
+        lat: r.latitude, lon: r.longitude
+      }));
+    }
+  } catch (_) { /* fall through to OpenStreetMap */ }
+  if (towns.length) return towns;
+  const url = 'https://nominatim.openstreetmap.org/search?' + new URLSearchParams({ q, format: 'json', limit: '6', addressdetails: '1', 'accept-language': 'en' });
   const res = await fetchFn(url);
-  if (!res.ok) throw new LocationError(`Place search failed (${res.status}).`, 'http');
-  const json = await res.json();
-  return (json.results || []).map(r => ({
-    name: r.name,
-    detail: [r.admin1, r.country_code === 'US' ? null : r.country].filter(Boolean).join(', '),
-    lat: r.latitude, lon: r.longitude
-  }));
+  if (!res.ok) throw new LocationError(`Place search failed (${res.status}). Try again in a moment.`, 'http');
+  const found = await res.json();
+  if (!Array.isArray(found)) return [];
+  return found.map(r => {
+    const a = r.address || {};
+    const name = r.name || String(r.display_name || '').split(',')[0];
+    return {
+      name,
+      detail: [a.suburb || a.neighbourhood, a.city || a.town || a.village, a.country_code === 'us' ? a.state : a.country].filter(Boolean).filter(x => x !== name).join(', '),
+      lat: Number(r.lat), lon: Number(r.lon)
+    };
+  });
 }
 
 /** Coordinates → a short neighbourhood label (OpenStreetMap Nominatim). Falls back to coordinates. */
@@ -54,7 +75,9 @@ export async function placeLabel(lat, lon, fetchFn = globalThis.fetch) {
     const res = await fetchFn(url);
     if (!res.ok) throw new Error(String(res.status));
     const a = (await res.json()).address || {};
-    return a.neighbourhood || a.suburb || a.quarter || a.city_district || a.town || a.city || a.village || a.county || coordLabel(lat, lon);
+    const admin = /community board|district \d|ward \d/i;   // admin areas like "Manhattan Community Board 1" aren't place names
+    const pick = [a.neighbourhood, a.quarter, a.suburb, a.city_district, a.town, a.city, a.village, a.county].find(v => v && !admin.test(v));
+    return pick || coordLabel(lat, lon);
   } catch (_) {
     return coordLabel(lat, lon);
   }
