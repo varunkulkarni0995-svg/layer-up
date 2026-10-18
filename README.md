@@ -44,6 +44,7 @@ npm test        # 60 unit tests: mapper, weather, location, settings
 ## Data
 
 - Weather: [Open-Meteo](https://open-meteo.com) (free, no key)
-- Place search: Open-Meteo geocoding
+- Place search (type-as-you-go, biased to your location): [Photon](https://photon.komoot.io) on OpenStreetMap data; Open-Meteo geocoding as a fallback
+- Your location: the browser's Geolocation API (the OS location service: GPS on phones, Wi-Fi on laptops)
 - Neighbourhood names: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors (Nominatim)
 - Settings are saved in this browser until milestone 2.

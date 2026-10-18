@@ -218,15 +218,15 @@ function renderSheet() {
     timer = setTimeout(async () => {
       const my = ++seq, q = input.value;
       const box = $('#locResults');
-      if (q.trim().length < 2) { box.innerHTML = ''; return; }
+      if (q.trim().length < 3) { box.innerHTML = q.trim() ? '<p class="hint">Keep typing…</p>' : ''; return; }
       box.innerHTML = '<p class="hint">Searching…</p>';
       try {
-        const res = await searchPlaces(q);
+        const res = await searchPlaces(q, undefined, state.place);
         if (my !== seq) return;
         state._results = res;
         box.innerHTML = res.length ? res.map((p, i) => `<button type="button" data-action="pick-result" data-i="${i}"><span>${esc(p.name)}</span><small>${esc(p.detail)}</small></button>`).join('') : '<p class="hint">No places found. Try a nearby city.</p>';
       } catch (e) { box.innerHTML = `<p class="hint">${esc(e.message)}</p>`; }
-    }, 350);
+    }, 400);
   });
   setTimeout(() => input.focus(), 50);
 }
@@ -257,7 +257,8 @@ function renderTrip() {
     <form class="card" id="tripForm" novalidate>
       <div class="field" style="position:relative"><label for="tripWhere">Where</label>
         <input id="tripWhere" type="search" autocomplete="off" placeholder="e.g. Brooklyn Bridge Park" value="${esc(t.place?.name || '')}">
-        <div class="list" id="tripResults"></div></div>
+        <div class="list" id="tripResults"></div>
+        ${quickPlaces().length ? `<div class="chips" style="margin-top:4px">${quickPlaces().map((p, i) => `<button type="button" class="chip" data-action="trip-quick" data-i="${i}" aria-pressed="${!!(t.place && t.place.lat === p.lat && t.place.lon === p.lon)}">${i === 0 && state.place ? icon.pin + ' ' : ''}${esc(p.name)}</button>`).join('')}</div>` : ''}</div>
       <div class="row" style="gap:10px">
         <label class="field" style="flex:1">Day<select id="tripDay">${days.map(([i, l]) => `<option value="${i}" ${t.day === i ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
         <label class="field" style="flex:1">Time<select id="tripHour">${hours.map(h => `<option value="${h}" ${h === hourSel ? 'selected' : ''}>${fmtHour(h)}</option>`).join('')}</select></label>
@@ -268,6 +269,12 @@ function renderTrip() {
       <button type="submit" class="pill-btn primary" style="justify-content:center;min-height:46px;font-size:15px">Get outfit</button>
     </form>
     <div id="tripOut" style="scroll-margin-top:12px">${result}</div>`;
+}
+
+function quickPlaces() {
+  const out = [], key = p => p.lat.toFixed(2) + ',' + p.lon.toFixed(2), seen = new Set();
+  [state.place, ...state.settings.places].filter(Boolean).forEach(p => { if (!seen.has(key(p))) { seen.add(key(p)); out.push(p); } });
+  return out.slice(0, 4);
 }
 
 async function runTrip() {
@@ -301,14 +308,14 @@ function wireTrip() {
     clearTimeout(timer);
     timer = setTimeout(async () => {
       const my = ++seq, q = input.value, box = $('#tripResults');
-      if (q.trim().length < 2) { box.innerHTML = ''; return; }
+      if (q.trim().length < 3) { box.innerHTML = q.trim() ? '<p class="hint">Keep typing…</p>' : ''; return; }
       try {
-        const res = await searchPlaces(q);
+        const res = await searchPlaces(q, undefined, state.place);
         if (my !== seq) return;
         state._tripResults = res;
         box.innerHTML = res.map((p, i) => `<button type="button" data-action="trip-place" data-i="${i}"><span>${esc(p.name)}</span><small>${esc(p.detail)}</small></button>`).join('') || '<p class="hint">No places found.</p>';
       } catch (e) { box.innerHTML = `<p class="hint">${esc(e.message)}</p>`; }
-    }, 350);
+    }, 400);
   });
   input.addEventListener('keydown', e => {
     // Enter in the search box picks the first result instead of submitting an empty place.
@@ -425,7 +432,8 @@ document.addEventListener('click', e => {
     case 'unit': state.settings.units[el.dataset.k] = el.dataset.v; save(); render(); break;
     case 'trip-occ': state.trip.occasion = el.dataset.v; keepTripInputs(); render(); break;
     case 'trip-act': state.trip.activity = el.dataset.v; keepTripInputs(); render(); break;
-    case 'trip-place': { const p = state._tripResults[i]; state.trip.place = p; state.trip.error = null; $('#tripWhere').value = p.name; $('#tripResults').innerHTML = `<p class="hint">✓ ${esc(p.name)}${p.detail ? ', ' + esc(p.detail) : ''}</p>`; break; }
+    case 'trip-quick': { const p = quickPlaces()[i]; state.trip.place = { name: p.name, detail: p.detail || '', lat: p.lat, lon: p.lon }; state.trip.error = null; state.trip.result = null; keepTripInputs(); render(); break; }
+    case 'trip-place': { const p = state._tripResults[i]; state.trip.place = p; state.trip.error = null; state.trip.result = null; const out = $('#tripOut'); if (out) out.innerHTML = ''; $('#tripWhere').value = p.name; $('#tripResults').innerHTML = `<p class="hint">✓ ${esc(p.name)}${p.detail ? ', ' + esc(p.detail) : ''}</p>`; break; }
     case 'reset-all':
       if (el.dataset.armed) { state.settings = JSON.parse(JSON.stringify({ ...DEFAULT_SETTINGS, places: state.settings.places, lastPlace: state.settings.lastPlace })); save(); render(); toast('Settings reset to defaults'); }
       else { el.dataset.armed = '1'; el.textContent = 'Tap again to reset'; setTimeout(() => { if (el.isConnected) { delete el.dataset.armed; el.textContent = 'Reset all'; } }, 3000); }

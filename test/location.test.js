@@ -27,13 +27,28 @@ test('no geolocation in browser', async () => {
   await assert.rejects(getDeviceLocation({ geo: undefined, isSecure: true }), e => e.code === 'unsupported');
 });
 
-test('place search maps results', async () => {
-  const r = await searchPlaces('Brooklyn', json({ results: [{ name: 'Brooklyn', admin1: 'New York', country: 'United States', country_code: 'US', latitude: 40.65, longitude: -73.95 }] }));
-  assert.deepEqual(r, [{ name: 'Brooklyn', detail: 'New York', lat: 40.65, lon: -73.95 }]);
+test('place search uses Photon, biased to where you are', async () => {
+  let url = '';
+  const fetchFn = async u => { url = u; return { ok: true, status: 200, json: async () => ({ features: [
+    { geometry: { coordinates: [-73.9855, 40.758] }, properties: { name: 'Times Square', district: 'Manhattan', city: 'New York', state: 'New York', countrycode: 'US' } },
+    { geometry: { coordinates: [-73.9855, 40.758] }, properties: { name: 'Times Square', district: 'Manhattan', city: 'New York', state: 'New York', countrycode: 'US' } },
+    { geometry: { coordinates: [-73.99, 40.75] }, properties: { street: 'West 42nd Street', housenumber: '229', city: 'New York', state: 'New York', countrycode: 'US' } }
+  ] }) }; };
+  const r = await searchPlaces('times sq', fetchFn, { lat: 40.71, lon: -74.01 });
+  assert.ok(url.startsWith('https://photon.komoot.io/api/?'));
+  assert.ok(url.includes('lat=40.710') && url.includes('lon=-74.010'));
+  assert.deepEqual(r, [
+    { name: 'Times Square', detail: 'Manhattan, New York', lat: 40.758, lon: -73.9855 },
+    { name: '229 West 42nd Street', detail: 'New York, New York', lat: 40.75, lon: -73.99 }
+  ]);
 });
-test('place search ignores 1-letter queries and empty results', async () => {
-  assert.deepEqual(await searchPlaces('B', json({})), []);
-  assert.deepEqual(await searchPlaces('Zzzz', json({})), []);
+test('place search waits for 3 letters', async () => {
+  assert.deepEqual(await searchPlaces('Ti', json({})), []);
+});
+test('if Photon is down, falls back to Open-Meteo towns', async () => {
+  const fetchFn = async u => u.includes('photon') ? { ok: false, status: 503, json: async () => ({}) }
+    : { ok: true, status: 200, json: async () => ({ results: [{ name: 'Brooklyn', admin1: 'New York', country_code: 'US', latitude: 40.65, longitude: -73.95 }] }) };
+  assert.deepEqual(await searchPlaces('Brooklyn', fetchFn), [{ name: 'Brooklyn', detail: 'New York', lat: 40.65, lon: -73.95 }]);
 });
 test('place label prefers neighbourhood, falls back to coordinates', async () => {
   assert.equal(await placeLabel(40.71, -74.01, json({ address: { neighbourhood: 'Financial District', city: 'New York' } })), 'Financial District');
@@ -61,17 +76,6 @@ test('recent places dedupe and cap at 5', () => {
   assert.equal(s.places.filter(p => p.lat === 43).length, 1);
 });
 
-test('parks and addresses fall back to OpenStreetMap search', async () => {
-  const calls = [];
-  const fetchFn = async url => {
-    calls.push(url);
-    if (url.includes('geocoding-api')) return { ok: true, status: 200, json: async () => ({}) };
-    return { ok: true, status: 200, json: async () => ([{ name: 'Brooklyn Bridge Park', display_name: 'Brooklyn Bridge Park, Brooklyn, New York', lat: '40.7003', lon: '-73.9967', address: { suburb: 'Brooklyn', city: 'New York', state: 'New York', country_code: 'us' } }]) };
-  };
-  const r = await searchPlaces('Brooklyn Bridge Park', fetchFn);
-  assert.equal(calls.length, 2);
-  assert.deepEqual(r, [{ name: 'Brooklyn Bridge Park', detail: 'Brooklyn, New York, New York', lat: 40.7003, lon: -73.9967 }]);
-});
 test('label skips admin areas like "Community Board"', async () => {
   const label = await placeLabel(40.75, -73.99, json({ address: { suburb: 'Manhattan Community Board 5', neighbourhood: 'Koreatown', city: 'New York' } }));
   assert.equal(label, 'Koreatown');

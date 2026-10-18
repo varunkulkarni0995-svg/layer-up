@@ -33,39 +33,47 @@ export function getDeviceLocation({
 }
 
 /**
- * Place name → coordinates. Open-Meteo knows cities and neighbourhoods; parks, landmarks and
- * street addresses fall back to OpenStreetMap (Nominatim).
+ * Place search as you type: landmarks, parks, streets, neighbourhoods, cities.
+ * Photon (OpenStreetMap data, built for search-as-you-type) ranks results near `near` first.
+ * If Photon is down, falls back to Open-Meteo, which only knows towns and cities.
  */
-export async function searchPlaces(query, fetchFn = globalThis.fetch) {
+export async function searchPlaces(query, fetchFn = globalThis.fetch, near = null) {
   const q = String(query || '').trim();
-  if (q.length < 2) return [];
-  let towns = [];
+  if (q.length < 3) return [];
   try {
+    const p = new URLSearchParams({ q, limit: '6', lang: 'en' });
+    if (near && isFinite(near.lat) && isFinite(near.lon)) { p.set('lat', Number(near.lat).toFixed(3)); p.set('lon', Number(near.lon).toFixed(3)); }
+    const res = await fetchFn('https://photon.komoot.io/api/?' + p.toString());
+    if (!res.ok) throw new Error(String(res.status));
+    const feats = (await res.json()).features || [];
+    return dedupe(feats.map(photonPlace).filter(Boolean));
+  } catch (_) {
     const url = 'https://geocoding-api.open-meteo.com/v1/search?' + new URLSearchParams({ name: q, count: '6', language: 'en', format: 'json' });
     const res = await fetchFn(url);
-    if (res.ok) {
-      towns = ((await res.json()).results || []).map(r => ({
-        name: r.name,
-        detail: [r.admin1, r.country_code === 'US' ? null : r.country].filter(Boolean).join(', '),
-        lat: r.latitude, lon: r.longitude
-      }));
-    }
-  } catch (_) { /* fall through to OpenStreetMap */ }
-  if (towns.length) return towns;
-  const url = 'https://nominatim.openstreetmap.org/search?' + new URLSearchParams({ q, format: 'json', limit: '6', addressdetails: '1', 'accept-language': 'en' });
-  const res = await fetchFn(url);
-  if (!res.ok) throw new LocationError(`Place search failed (${res.status}). Try again in a moment.`, 'http');
-  const found = await res.json();
-  if (!Array.isArray(found)) return [];
-  return found.map(r => {
-    const a = r.address || {};
-    const name = r.name || String(r.display_name || '').split(',')[0];
-    return {
-      name,
-      detail: [a.suburb || a.neighbourhood, a.city || a.town || a.village, a.country_code === 'us' ? a.state : a.country].filter(Boolean).filter(x => x !== name).join(', '),
-      lat: Number(r.lat), lon: Number(r.lon)
-    };
-  });
+    if (!res.ok) throw new LocationError(`Place search isn't working right now (${res.status}). Try again in a moment.`, 'http');
+    return ((await res.json()).results || []).map(r => ({
+      name: r.name,
+      detail: [r.admin1, r.country_code === 'US' ? null : r.country].filter(Boolean).join(', '),
+      lat: r.latitude, lon: r.longitude
+    }));
+  }
+}
+
+function photonPlace(f) {
+  const p = f.properties || {}, c = f.geometry?.coordinates;
+  if (!c || c.length < 2) return null;
+  const street = p.street ? [p.housenumber, p.street].filter(Boolean).join(' ') : '';
+  const name = p.name || street || p.district || p.city;
+  if (!name) return null;
+  const area = p.district || p.locality || p.city || p.county;
+  const region = p.countrycode === 'US' ? p.state : p.country;
+  const detail = [street !== name ? street : '', area !== name ? area : '', region !== name ? region : ''].filter(Boolean).join(', ');
+  return { name, detail, lat: c[1], lon: c[0] };   // GeoJSON order is [lon, lat]
+}
+
+function dedupe(list) {
+  const seen = new Set();
+  return list.filter(p => { const k = p.name + '|' + p.lat.toFixed(3) + '|' + p.lon.toFixed(3); if (seen.has(k)) return false; seen.add(k); return true; });
 }
 
 /** Coordinates → a short neighbourhood label (OpenStreetMap Nominatim). Falls back to coordinates. */
