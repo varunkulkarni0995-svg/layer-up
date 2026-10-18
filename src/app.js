@@ -236,8 +236,8 @@ function renderTrip() {
   const t = state.trip, s = state.settings;
   const days = [0, 1, 2, 3, 4, 5, 6].map(i => { const d = new Date(Date.now() + i * 864e5); return [i, i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })]; });
   const nowH = new Date().getHours();
-  const hour = t.hour ?? Math.min(23, nowH + 1);
-  const hours = Array.from({ length: 24 }, (_, h) => h).filter(h => t.day > 0 || h >= nowH);
+  const hour = t.hour ?? Math.min(23, nowH + 1);   // starting suggestion only
+  const hours = Array.from({ length: 24 }, (_, h) => h);   // destination's local time; past hours are checked after the forecast loads
   const hourSel = hours.includes(hour) ? hour : hours[0];
   const act = t.activity || s.activity;
   const occ = Object.entries(OCCASIONS).map(([k, v]) => `<button type="button" class="chip" data-action="trip-occ" data-v="${k}" aria-pressed="${t.occasion === k}">${v.label}</button>`).join('');
@@ -246,11 +246,11 @@ function renderTrip() {
   if (t.loading) result = '<div class="skeleton" style="height:240px"></div>';
   else if (t.error) result = `<div class="banner err" role="alert"><span>${esc(t.error)}</span></div>`;
   else if (t.result) {
-    const { r, win, place } = t.result;
+    const { r, win, place, tz } = t.result;
     const temps = win.map(h => h.tempC), feels = win.map(h => h.feelsC);
     const cond = describeCode(win[0].code).text;
     const label = `${place.name} · ${fmtHour(win[0].hour)}${win.length > 1 ? '–' + fmtHour(win[win.length - 1].hour) : ''}`;
-    const sub = `Feels ${fmtRange(Math.min(...feels), Math.max(...feels))} · actual ${fmtRange(Math.min(...temps), Math.max(...temps))} · wind max ${fmtWind(Math.max(...win.map(h => h.windKmh)))}${cond ? ' · ' + cond : ''}`;
+    const sub = `Feels ${fmtRange(Math.min(...feels), Math.max(...feels))} · actual ${fmtRange(Math.min(...temps), Math.max(...temps))} · wind max ${fmtWind(Math.max(...win.map(h => h.windKmh)))}${cond ? ' · ' + cond : ''}${tz ? ' · times in ' + tz.replace(/_/g, ' ') : ''}`;
     result = outfitCard(r, label, sub, win, false);
   }
   return `<h1>Plan a trip</h1>
@@ -261,7 +261,7 @@ function renderTrip() {
         ${quickPlaces().length ? `<div class="chips" style="margin-top:4px">${quickPlaces().map((p, i) => `<button type="button" class="chip" data-action="trip-quick" data-i="${i}" aria-pressed="${!!(t.place && t.place.lat === p.lat && t.place.lon === p.lon)}">${i === 0 && state.place ? icon.pin + ' ' : ''}${esc(p.name)}</button>`).join('')}</div>` : ''}</div>
       <div class="row" style="gap:10px">
         <label class="field" style="flex:1">Day<select id="tripDay">${days.map(([i, l]) => `<option value="${i}" ${t.day === i ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
-        <label class="field" style="flex:1">Time<select id="tripHour">${hours.map(h => `<option value="${h}" ${h === hourSel ? 'selected' : ''}>${fmtHour(h)}</option>`).join('')}</select></label>
+        <label class="field" style="flex:1">Time (local)<select id="tripHour">${hours.map(h => `<option value="${h}" ${h === hourSel ? 'selected' : ''}>${fmtHour(h)}</option>`).join('')}</select></label>
         <label class="field" style="flex:1">Outside for<select id="tripDur">${[1, 2, 3, 4].map(n => `<option value="${n}" ${t.duration === n ? 'selected' : ''}>${n} h</option>`).join('')}</select></label>
       </div>
       <div class="field">Activity<div class="seg" role="group" aria-label="Activity">${acts}</div></div>
@@ -287,10 +287,17 @@ async function runTrip() {
     const base = localNowIso(f).slice(0, 10);
     const d = new Date(base + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + t.day);
     const startIso = d.toISOString().slice(0, 10) + 'T' + String(t.hour).padStart(2, '0') + ':00';
+    const localNow = localNowIso(f);
+    if (startIso.slice(0, 13) < localNow.slice(0, 13)) {
+      const h = Number(localNow.slice(11, 13));
+      throw new Error(`It's already ${fmtHour(h)} in ${t.place.name}. Pick a later time or another day.`);
+    }
     const win = hoursBetween(f, startIso, t.duration);
     if (!win.length) throw new Error('No forecast for that time yet. Pick a time within the next 7 days.');
     const r = recommend({ hours: toMapperHours(win), activity: t.activity || state.settings.activity, occasion: t.occasion, tolerance: state.settings.tolerance, wardrobe: state.settings.wardrobe });
-    t.result = { r, win, place: t.place };
+    let deviceTz = '';
+    try { deviceTz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (_) {}
+    t.result = { r, win, place: t.place, tz: f.timezone && deviceTz && f.timezone !== deviceTz ? f.timezone : '' };
     state.settings = rememberPlace(state.settings, t.place); save();
   } catch (e) { t.error = e.message || "Couldn't get the forecast for that place. Try again."; t.result = null; }
   finally { t.loading = false; render(); showTripResult(); }

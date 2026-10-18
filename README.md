@@ -38,7 +38,7 @@ Location access needs `https` or `localhost`.
 ## Tests
 
 ```
-npm test        # 60 unit tests: mapper, weather, location, settings
+npm test        # 63 unit tests: mapper, weather, location, settings
 ```
 
 ## Data

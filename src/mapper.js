@@ -63,7 +63,8 @@ function bySlot(wardrobe) {
  * Pick the best outfit for a set of hours (one hour or a window).
  * Dresses for the hardest hour in the window and reports what to add or remove as hours change.
  */
-export function recommend({ hours, activity = 'walk', occasion = 'casual', tolerance = {}, wardrobe }) {
+export function recommend({ hours, activity = 'walk', occasion = 'casual', tolerance = {}, wardrobe, _relax = 0 }) {
+  // _relax: 0 = all rules, 1 = drop dress code, 2 = also drop rain/wind gear rules. Always ends at 2.
   if (!hours || !hours.length) throw new Error('recommend() needs at least one hour of weather');
   if (!wardrobe || !wardrobe.length) throw new Error('recommend() needs a wardrobe');
   const act = ACTIVITIES[activity] || ACTIVITIES.walk;
@@ -102,11 +103,11 @@ export function recommend({ hours, activity = 'walk', occasion = 'casual', toler
     const visible = outer || mid || base;
     const reasons = [];
     // Hard rules
-    if (occ.minDressy && (visible.dressy ?? 0) < occ.minDressy) continue;
-    if (dressyOccasion && mid && (mid.dressy ?? 0) < 4) continue;          // no hoodie under the nice jacket at dinner
+    if (_relax < 1 && occ.minDressy && (visible.dressy ?? 0) < occ.minDressy) continue;
+    if (_relax < 1 && dressyOccasion && mid && (mid.dressy ?? 0) < 4) continue;          // no hoodie under the nice jacket at dinner
     if (base.id === 'thermals' && !thermalsOk) continue;
-    if (rainy && act.noUmbrella && (!outer || outer.water < 0.5)) continue; // can't hold an umbrella on a bike or a run
-    if (windy && need > 6 && (!outer || outer.wind < 0.5)) continue;
+    if (_relax < 2 && rainy && act.noUmbrella && (!outer || outer.water < 0.5)) continue; // can't hold an umbrella on a bike or a run
+    if (_relax < 2 && windy && need > 6 && (!outer || outer.wind < 0.5)) continue;
 
     const warmth = base.warmth + (mid?.warmth || 0) + (outer?.warmth || 0) + extrasWarmth;
     const under = Math.max(0, need - warmth);
@@ -121,8 +122,11 @@ export function recommend({ hours, activity = 'walk', occasion = 'casual', toler
   }
 
   if (!best) {
-    // Nothing met the hard rules (e.g. a dressy occasion with no dressy outer): relax dressiness.
-    return recommend({ hours, activity, occasion: 'casual', tolerance, wardrobe });
+    // Nothing met the hard rules. Relax one level at a time; level 2 has no hard rules left, so this always ends.
+    if (_relax >= 2) throw new Error('recommend() could not build any outfit from this wardrobe');
+    const r = recommend({ hours, activity, occasion, tolerance, wardrobe, _relax: _relax + 1 });
+    if (_relax === 0 && occ.minDressy && !r.notes.some(n => n.startsWith('Nothing dressy'))) r.notes.push(`Nothing dressy enough for ${occ.label.toLowerCase()} in your wardrobe`);
+    return r;
   }
 
   const pieces = [best.base, best.mid, best.outer].filter(p => p && !p.implicit && p.id !== 'none');
@@ -142,6 +146,8 @@ export function recommend({ hours, activity = 'walk', occasion = 'casual', toler
   if (act.shed && best.outer) notes.push(act.shed);
   if (windy) notes.push(`Windy (up to ${Math.round(maxWind)} km/h)`);
   if (best.under > 1.5) notes.push('Warmest combo you own is still a little light');
+  if (_relax >= 2 && rainy && act.noUmbrella && !(best.outer && best.outer.water >= 0.5)) notes.push("You'll get wet: none of your outer layers is water-resistant");
+  if (_relax >= 2 && windy && need > 6 && !(best.outer && best.outer.wind >= 0.5)) notes.push('None of your outer layers blocks wind');
 
   const umbrella = rainy && !act.noUmbrella;
   return {

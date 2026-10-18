@@ -161,3 +161,23 @@ test('class at 8°: lighter than walking, take-it-off tip', () => {
   assert.ok(cls.warmth <= rec([H(8)]).warmth);
   if (cls.outfit.outer) assert.ok(cls.notes.some(n => n.includes('in class')));
 });
+
+// ---------- Impossible wardrobes never crash (regression) ----------
+test('run in rain with no water-resistant outer: graceful warning, no crash', () => {
+  const dry = W.map(i => (i.slot === 'outer' ? { ...i, water: 0 } : i));
+  const r = rec([H(8, { rain: 80 })], { activity: 'run', wardrobe: dry });
+  assert.ok(r.title.length > 0);
+  assert.equal(r.umbrella, false);
+  assert.ok(r.notes.some(n => n.includes('water-resistant')), r.notes.join(' | '));
+});
+test('cold wind with no wind-blocking outer: graceful warning', () => {
+  const thin = W.map(i => (i.slot === 'outer' ? { ...i, wind: 0 } : i));
+  const r = rec([H(2, { wind: 40 })], { wardrobe: thin });
+  assert.ok(r.notes.some(n => n.includes('blocks wind')));
+});
+test('rainy date run with nothing suitable at all still answers', () => {
+  const bare = W.filter(i => i.slot !== 'outer');
+  const r = rec([H(5, { rain: 90, wind: 40 })], { activity: 'run', occasion: 'date', wardrobe: bare });
+  assert.ok(r.title.length > 0);
+  assert.ok(r.notes.some(n => n.startsWith('Nothing dressy')));
+});
