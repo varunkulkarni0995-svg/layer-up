@@ -12,7 +12,11 @@ export const DEFAULT_SETTINGS = {
   activities: [...DEFAULT_ACTIVITIES],   // which activities show as buttons; more can be added later
   wardrobe: DEFAULT_WARDROBE.map(i => ({ ...i })),
   places: [],        // saved/recent: { name, detail, lat, lon }
-  lastPlace: null    // { name, lat, lon, source }
+  lastPlace: null,   // { name, lat, lon, source }
+  provider: 'gemini',          // which vision model reads garment photos
+  aiKeys: {},                  // { gemini|openai|anthropic: key } — this browser only, never sent anywhere but that provider
+  aiModels: {},                // optional per-provider model override
+  evalLog: []                  // { at, provider, model, proposed, final, confidence, evidence, changed }
 };
 
 export function loadSettings(storage = safeStorage()) {
@@ -28,7 +32,11 @@ export function loadSettings(storage = safeStorage()) {
       activity: list.includes(s.activity) ? s.activity : list.includes('walk') ? 'walk' : list[0],
       tolerance: { ...DEFAULT_SETTINGS.tolerance, ...(s.tolerance || {}) },
       units: { ...DEFAULT_SETTINGS.units, ...(s.units || {}) },
-      wardrobe: Array.isArray(s.wardrobe) && s.wardrobe.length ? s.wardrobe : clone(DEFAULT_SETTINGS.wardrobe)
+      wardrobe: Array.isArray(s.wardrobe) && s.wardrobe.length ? s.wardrobe : clone(DEFAULT_SETTINGS.wardrobe),
+      provider: s.provider in { gemini: 1, openai: 1, anthropic: 1 } ? s.provider : 'gemini',
+      aiKeys: { ...(s.aiKeys || {}) },
+      aiModels: { ...(s.aiModels || {}) },
+      evalLog: Array.isArray(s.evalLog) ? s.evalLog : []
     };
   } catch (_) {
     return clone(DEFAULT_SETTINGS);
