@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Layer Up — evals</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=Archivo+Narrow:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+<style>
+  body { background: var(--bg); }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 20px 64px; }
+  .wrap h1 { margin: 0 0 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font: 600 12px/1.4 'Archivo Narrow', sans-serif; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  .ok { color: var(--good, #1e7f4f); font-weight: 700; }
+  .bad { color: var(--bad); font-weight: 700; }
+  .verdict { font-size: 22px; font-weight: 800; }
+  .drop { border: 1px dashed var(--line); border-radius: 14px; padding: 20px; background: var(--sunk); text-align: center; }
+  .fixtures { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; }
+  .fx { border: 1px solid var(--line); border-radius: 10px; padding: 6px; background: var(--panel); font-size: 12px; }
+  .fx img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; display: block; margin-bottom: 4px; }
+  .fx select, .fx input { width: 100%; font: 500 12px Archivo, sans-serif; margin-top: 2px; }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+  .bar i { display: block; height: 100%; background: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Evals</h1>
+  <p class="hint" id="sub">Runs the same VisionClient the app uses, with the key from Settings. <a href="/">← back to the app</a></p>
+  <div id="root"></div>
+</div>
+<script type="module" src="src/eval-app.js"></script>
+<noscript><p style="padding:24px">This page needs JavaScript.</p></noscript>
+</body>
+</html>

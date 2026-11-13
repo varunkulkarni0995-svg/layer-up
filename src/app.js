@@ -3,6 +3,8 @@ import { recommend, extrasThreshold, rainThreshold, ACTIVITIES, OCCASIONS } from
 import { fetchForecast, upcomingHours, hoursBetween, describeCode, localNowIso } from './weather.js';
 import { getDeviceLocation, searchPlaces, placeLabel } from './location.js';
 import { loadSettings, saveSettings, rememberPlace, DEFAULT_SETTINGS } from './store.js';
+import { analyseGarment, prepareImage, makeThumbnail, PROVIDERS, VisionError } from './vision.js';
+import { gate, applyAnswer, toWardrobeItem, diffProposal, SLOTS } from './garment.js';
 
 const NYC = { name: 'New York', lat: 40.7128, lon: -74.006, source: 'default' };
 const $ = s => document.querySelector(s);
@@ -14,7 +16,8 @@ const state = {
   place: null,
   forecast: null, fetchedAt: 0, loading: false, error: null, locNote: null,
   sel: null,                     // [start, end] indexes into upcoming hours
-  sheet: null,                   // 'location'
+  sheet: null,                   // 'location' | 'photo'
+  photo: null,                   // { stage, dataUrl, thumb, result, gate, garment, answer, error, meta }
   trip: { place: null, day: 0, hour: null, duration: 2, activity: null, occasion: 'casual', result: null, loading: false, error: null }
 };
 
@@ -41,6 +44,7 @@ function toast(msg) {
 const icon = {
   pin: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
   chev: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>',
+  camera: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5A1.5 1.5 0 0 1 4.5 7h2L8 5h8l1.5 2h2A1.5 1.5 0 0 1 21 8.5v9A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z"/><circle cx="12" cy="12.5" r="3.5"/></svg>',
   refresh: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
   reset: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11a8 8 0 1 1 2.3 5.7"/><path d="M4 4v7h7"/></svg>',
   target: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2F63C9" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>'
@@ -199,6 +203,7 @@ function outfitCard(r, label, sub, windowHours, closable = true) {
 /* ---------- Location sheet ---------- */
 function renderSheet() {
   const root = $('#sheet-root');
+  if (state.sheet === 'photo') return renderPhotoSheet(root);
   if (state.sheet !== 'location') { root.innerHTML = ''; return; }
   const places = state.settings.places;
   root.innerHTML = `<div class="sheet-wrap" data-action="close-sheet-bg">
@@ -352,7 +357,7 @@ function renderSettings() {
   const seg = (key, opts) => `<div class="seg" role="group" style="width:168px">${opts.map(([v, l]) => `<button type="button" data-action="unit" data-k="${key}" data-v="${v}" aria-pressed="${s.units[key] === v}">${l}</button>`).join('')}</div>`;
   const acts = activityButtons(s.activity, 'activity');
   const ward = s.wardrobe.filter(i => i.slot !== 'carry').map(i => `<div class="ward" data-item="${i.id}">
-      <div class="between"><b>${esc(i.name)}</b><span class="hint">${esc(i.slot)}</span></div>
+      <div class="between"><b>${i.thumb ? `<img class="thumb" src="${i.thumb}" alt="">` : ''}${esc(i.name)}</b><span class="hint">${esc(i.slot)}${i.addedBy === 'photo' ? ` · <button type="button" class="link" data-action="drop-item" data-id="${i.id}">Remove</button>` : ''}</span></div>
       <label class="sr" for="w-${i.id}">${esc(i.name)} warmth</label>
       <div class="w-range"><input id="w-${i.id}" type="range" min="0" max="10" step="1" value="${i.warmth}" data-ward="${i.id}" data-f="warmth"><span class="val" id="wv-${i.id}">${i.warmth}</span></div>
       ${['base', 'head', 'hands'].includes(i.slot) ? '' : `<div class="checks">
@@ -367,8 +372,12 @@ function renderSettings() {
       <div class="between"><b>Wind</b>${seg('wind', [['kmh', 'km/h'], ['mph', 'mph']])}</div>
       <div class="between"><b>Time</b>${seg('time', [['12', '12-hour'], ['24', '24-hour']])}</div></section>
     <section class="card"><div class="eyebrow">Default activity</div><div class="seg" role="group" aria-label="Default activity">${acts}</div></section>
-    <section class="card"><div class="between"><div class="eyebrow">My wardrobe · warmth 0–10</div><span class="hint">Umbrella: always in bag</span></div>${ward}</section>
-    <section class="card"><div class="between"><span class="hint">Saved on this device. Login + sync come in milestone 2.</span>
+    <section class="card"><div class="between"><div class="eyebrow">My wardrobe · warmth 0–10</div><span class="hint">Umbrella: always in bag</span></div>
+      <button type="button" class="pill-btn primary" data-action="add-photo" style="width:100%;justify-content:center;margin:4px 0 2px">${icon.camera}Add by photo</button>
+      <p class="hint" style="font-size:13px;margin:0">${keyReady() ? 'Snap a garment and check what it proposes.' : 'Add an API key below to turn this on.'}</p>
+      ${ward}</section>
+    <section class="card"><div class="eyebrow">AI key</div>${keySection()}</section>
+    <section class="card"><div class="between"><span class="hint">Saved on this device. Login + sync come in milestone 2.<br><span class="ver">Layer Up v0.2 · photo wardrobe</span></span>
       <button type="button" class="link" data-action="reset-all" id="resetAll" style="color:var(--bad)">Reset all</button></div></section>`;
 }
 
@@ -377,6 +386,16 @@ function wireSettings() {
     const k = el.dataset.tol;
     el.addEventListener('input', () => { const v = Number(el.value); state.settings.tolerance[k] = v; $('#val-' + k).textContent = sign(v); $('#eff-' + k).textContent = TOL[k].effect(v); });
     el.addEventListener('change', save);
+  });
+  const key = $('#aiKey');
+  if (key) key.addEventListener('change', () => {
+    state.settings.aiKeys = { ...(state.settings.aiKeys || {}), [state.settings.provider]: key.value.trim() };
+    save(); render();
+  });
+  const mdl = $('#aiModel');
+  if (mdl) mdl.addEventListener('change', () => {
+    state.settings.aiModels = { ...(state.settings.aiModels || {}), [state.settings.provider]: mdl.value.trim() };
+    save();
   });
   document.querySelectorAll('[data-ward]').forEach(el => {
     const item = state.settings.wardrobe.find(i => i.id === el.dataset.ward), f = el.dataset.f;
@@ -400,6 +419,166 @@ function renderAsk() {
       <p class="hint" style="font-size:14px">Until then: use <b>Trip</b> for a specific plan, and adjust the sliders in <b>Settings</b>.</p></section>`;
 }
 
+/* ---------- Add a garment by photo ---------- */
+const keyFor = p => (state.settings.aiKeys || {})[p] || '';
+const keyReady = () => !!keyFor(state.settings.provider);
+
+function keySection() {
+  const s = state.settings, p = s.provider, meta = PROVIDERS[p];
+  const has = keyFor(p);
+  const picker = Object.entries(PROVIDERS).map(([k, v]) =>
+    `<button type="button" data-action="provider" data-v="${k}" aria-pressed="${p === k}">${v.label}</button>`).join('');
+  return `<div class="seg" role="group" aria-label="AI provider" style="width:100%">${picker}</div>
+    <label class="sr" for="aiKey">${esc(meta.label)} API key</label>
+    <div class="field"><input id="aiKey" type="password" autocomplete="off" spellcheck="false"
+      placeholder="${esc(meta.keyHint)}" value="${esc(has)}"></div>
+    <div class="between">
+      <span class="hint" style="font-size:13px">Stored in this browser only. Never sent anywhere but ${esc(meta.label)}.</span>
+      ${has ? '<button type="button" class="link" data-action="clear-key" style="color:var(--bad)">Clear</button>' : ''}
+    </div>
+    <label class="sr" for="aiModel">Model</label>
+    <div class="field"><input id="aiModel" type="text" autocomplete="off" spellcheck="false"
+      placeholder="${esc(meta.defaultModel)}" value="${esc((s.aiModels || {})[p] || '')}"></div>
+    <p class="hint" style="font-size:13px;margin:0">Leave blank for ${esc(meta.defaultModel)}. <a href="/eval.html">Run the evals →</a></p>`;
+}
+
+function renderPhotoSheet(root) {
+  const ph = state.photo || {};
+  const body = {
+    capture: () => `<p class="hint">Lay the garment flat, or hang it against a plain wall. One item at a time.</p>
+      <label class="sr" for="photoFile">Choose a photo</label>
+      <input id="photoFile" type="file" accept="image/*" capture="environment">`,
+    working: () => `<div class="shot">${ph.dataUrl ? `<img src="${ph.dataUrl}" alt="">` : ''}</div>
+      <p class="hint">Reading it with ${esc(PROVIDERS[state.settings.provider].label)}…</p>`,
+    reject: () => `<div class="shot">${ph.dataUrl ? `<img src="${ph.dataUrl}" alt="">` : ''}</div>
+      <div class="banner">${esc(ph.gate.message)}</div>
+      <div class="row">
+        <button type="button" class="pill-btn primary" data-action="photo-retake">Retake</button>
+        <button type="button" class="pill-btn" data-action="photo-manual">Enter it manually</button>
+      </div>`,
+    error: () => `<div class="banner">${esc(ph.error)}</div>
+      <div class="row">
+        <button type="button" class="pill-btn primary" data-action="photo-retake">Try again</button>
+        <button type="button" class="pill-btn" data-action="close-sheet">Close</button>
+      </div>`,
+    ask: () => `<div class="shot">${ph.dataUrl ? `<img src="${ph.dataUrl}" alt="">` : ''}</div>
+      <p style="font-size:17px;font-weight:700;margin:0">${esc(ph.gate.clarify.question)}</p>
+      <div class="chips">${ph.gate.clarify.options.map(o =>
+        `<button type="button" class="chip" data-action="photo-answer" data-v="${esc(o)}">${esc(o)}</button>`).join('')}</div>
+      <button type="button" class="link" data-action="photo-skip-ask">Skip — I'll set it myself</button>`,
+    confirm: () => confirmForm(ph)
+  }[ph.stage] || (() => '');
+
+  root.innerHTML = `<div class="sheet-wrap" data-action="close-sheet-bg">
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="phTitle">
+      <div class="grab"></div>
+      <div class="between"><h2 id="phTitle" style="margin:0;font-size:20px;font-weight:800">Add by photo</h2>
+        <button type="button" class="link" data-action="close-sheet">Close</button></div>
+      ${body()}
+    </div></div>`;
+
+  const file = $('#photoFile');
+  if (file) file.addEventListener('change', () => file.files?.[0] && runPhoto(file.files[0]));
+  if (ph.stage === 'confirm') wireConfirm();
+}
+
+function confirmForm(ph) {
+  const g = ph.garment, touched = ph.touched || {};
+  const ai = f => (touched[f] ? '' : '<span class="ai">AI</span>');
+  const slots = SLOTS.filter(x => x !== 'carry').map(x =>
+    `<option value="${x}"${g.slot === x ? ' selected' : ''}>${x}</option>`).join('');
+  return `<div class="confirm">
+    <div class="shot small">${ph.thumb ? `<img src="${ph.thumb}" alt="">` : ''}</div>
+    <label class="sr" for="gName">Name</label>
+    <div class="field"><input id="gName" type="text" value="${esc(g.name)}" maxlength="60"></div>
+    <div class="between"><label for="gSlot">Layer ${ai('slot')}</label>
+      <select id="gSlot" class="sel">${slots}</select></div>
+    <div class="tol">
+      <div class="between"><label for="gWarmth">Warmth ${ai('warmth')}</label><span class="val" id="gWarmthVal">${g.warmth}</span></div>
+      <input id="gWarmth" type="range" min="0" max="10" step="1" value="${g.warmth}">
+      <div class="ends"><span>Adds nothing</span><span>Deep winter</span></div>
+      ${g.warmth_basis ? `<div class="effect">${esc(g.warmth_basis)}</div>` : ''}
+      <div class="hint" style="font-size:13px">Best guess — your scale, so change it if it feels wrong.</div>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" id="gWind" ${g.wind >= 0.5 ? 'checked' : ''}>Blocks wind ${ai('wind')}</label>
+      <label><input type="checkbox" id="gWater" ${g.water >= 0.5 ? 'checked' : ''}>Water-resistant ${ai('water')}</label>
+      <label><input type="checkbox" id="gDressy" ${g.dressy >= 6 ? 'checked' : ''}>Dressy ${ai('dressy')}</label>
+    </div>
+    ${(ph.result?.visible_evidence || []).length
+      ? `<p class="hint" style="font-size:13px">Saw: ${esc(ph.result.visible_evidence.join(', '))}</p>` : ''}
+    <div class="row">
+      <button type="button" class="pill-btn primary" data-action="photo-save">Save to wardrobe</button>
+      <button type="button" class="pill-btn" data-action="photo-retake">Retake</button>
+    </div>
+    <p class="hint" style="font-size:12px;margin:0">${esc(ph.meta ? `${PROVIDERS[ph.meta.provider].label} · ${ph.meta.model} · ${(ph.meta.ms / 1000).toFixed(1)}s` : '')}</p>
+  </div>`;
+}
+
+function wireConfirm() {
+  const ph = state.photo;
+  ph.touched = ph.touched || {};
+  const mark = f => { ph.touched[f] = true; };
+  const w = $('#gWarmth');
+  w.addEventListener('input', () => { ph.garment.warmth = Number(w.value); $('#gWarmthVal').textContent = w.value; mark('warmth'); });
+  $('#gName').addEventListener('input', e => { ph.garment.name = e.target.value; mark('name'); });
+  $('#gSlot').addEventListener('change', e => { ph.garment.slot = e.target.value; mark('slot'); renderSheet(); });
+  $('#gWind').addEventListener('change', e => { ph.garment.wind = e.target.checked ? 0.8 : 0.1; mark('wind'); });
+  $('#gWater').addEventListener('change', e => { ph.garment.water = e.target.checked ? 0.8 : 0.1; mark('water'); });
+  $('#gDressy').addEventListener('change', e => { ph.garment.dressy = e.target.checked ? 8 : 3; mark('dressy'); });
+}
+
+async function runPhoto(file) {
+  const provider = state.settings.provider;
+  state.photo = { stage: 'working' };
+  renderSheet();
+  try {
+    const { dataUrl } = await prepareImage(file);
+    state.photo = { stage: 'working', dataUrl };
+    renderSheet();
+
+    const { result, meta } = await analyseGarment({
+      dataUrl, provider,
+      apiKey: keyFor(provider),
+      model: (state.settings.aiModels || {})[provider] || undefined,
+      wardrobe: state.settings.wardrobe
+    });
+    const verdict = gate(result);
+    const thumb = await makeThumbnail(dataUrl).catch(() => null);
+    state.photo = {
+      ...state.photo, thumb, result, meta, gate: verdict,
+      garment: result.garment ? { ...result.garment } : null,
+      proposed: result.garment ? { ...result.garment } : null,
+      stage: verdict.verdict === 'reject' ? 'reject' : verdict.verdict === 'ask' ? 'ask' : 'confirm'
+    };
+  } catch (e) {
+    state.photo = { ...state.photo, stage: 'error', error: e instanceof VisionError ? e.message : 'Something went wrong reading that photo.' };
+  }
+  renderSheet();
+}
+
+function savePhotoGarment() {
+  const ph = state.photo;
+  const ids = state.settings.wardrobe.map(i => i.id);
+  const item = toWardrobeItem(ph.garment, ids);
+  if (ph.thumb) item.thumb = ph.thumb;
+  state.settings.wardrobe = [...state.settings.wardrobe, item];
+  if (ph.proposed) {
+    const d = diffProposal(ph.proposed, ph.garment);
+    state.settings.evalLog = [...(state.settings.evalLog || []), {
+      at: Date.now(), provider: ph.meta?.provider, model: ph.meta?.model,
+      proposed: ph.proposed, final: { ...ph.garment },
+      confidence: ph.result?.confidence || null,
+      evidence: ph.result?.visible_evidence || [],
+      changed: d.changed
+    }].slice(-200);
+  }
+  save();
+  state.sheet = null; state.photo = null;
+  render();
+  toast(`${item.name} added`);
+}
+
 /* ---------- Render + events ---------- */
 function render() {
   const screen = $('#screen');
@@ -420,8 +599,8 @@ document.addEventListener('click', e => {
   switch (a) {
     case 'refresh': loadWeather(); break;
     case 'open-location': state.sheet = 'location'; renderSheet(); break;
-    case 'close-sheet': state.sheet = null; renderSheet(); break;
-    case 'close-sheet-bg': if (e.target === el) { state.sheet = null; renderSheet(); } break;
+    case 'close-sheet': state.sheet = null; state.photo = null; renderSheet(); break;
+    case 'close-sheet-bg': if (e.target === el) { state.sheet = null; state.photo = null; renderSheet(); } break;
     case 'use-device': state.sheet = null; renderSheet(); useDeviceLocation(); break;
     case 'pick-result': { const p = state._results[i]; setPlace({ name: p.name, detail: p.detail, lat: p.lat, lon: p.lon, source: 'search' }); break; }
     case 'pick-recent': { const p = state.settings.places[i]; setPlace({ ...p, source: 'recent' }); break; }
@@ -441,6 +620,30 @@ document.addEventListener('click', e => {
     case 'trip-act': state.trip.activity = el.dataset.v; keepTripInputs(); render(); break;
     case 'trip-quick': { const p = quickPlaces()[i]; state.trip.place = { name: p.name, detail: p.detail || '', lat: p.lat, lon: p.lon }; state.trip.error = null; state.trip.result = null; keepTripInputs(); render(); break; }
     case 'trip-place': { const p = state._tripResults[i]; state.trip.place = p; state.trip.error = null; state.trip.result = null; const out = $('#tripOut'); if (out) out.innerHTML = ''; $('#tripWhere').value = p.name; $('#tripResults').innerHTML = `<p class="hint">✓ ${esc(p.name)}${p.detail ? ', ' + esc(p.detail) : ''}</p>`; break; }
+    case 'add-photo':
+      if (!keyReady()) { toast('Add an API key in Settings first'); break; }
+      state.sheet = 'photo'; state.photo = { stage: 'capture' }; renderSheet(); break;
+    case 'photo-retake': state.photo = { stage: 'capture' }; renderSheet(); break;
+    case 'photo-manual': state.sheet = null; state.photo = null; render(); toast('Add it with the sliders below'); break;
+    case 'photo-answer': {
+      const ph = state.photo, f = ph.gate.clarify.field;
+      ph.garment = applyAnswer(ph.garment, f, el.dataset.v);
+      ph.touched = { ...(ph.touched || {}), [f]: true };
+      ph.stage = 'confirm'; renderSheet(); break;
+    }
+    case 'photo-skip-ask': state.photo.stage = 'confirm'; renderSheet(); break;
+    case 'photo-save': savePhotoGarment(); break;
+    case 'provider': state.settings.provider = el.dataset.v; save(); render(); break;
+    case 'clear-key': {
+      const p = state.settings.provider;
+      state.settings.aiKeys = { ...(state.settings.aiKeys || {}), [p]: '' };
+      save(); render(); toast(PROVIDERS[p].label + ' key cleared'); break;
+    }
+    case 'drop-item': {
+      const id = el.dataset.id;
+      state.settings.wardrobe = state.settings.wardrobe.filter(i => i.id !== id);
+      save(); render(); toast('Removed'); break;
+    }
     case 'reset-all':
       if (el.dataset.armed) { state.settings = JSON.parse(JSON.stringify({ ...DEFAULT_SETTINGS, places: state.settings.places, lastPlace: state.settings.lastPlace })); save(); render(); toast('Settings reset to defaults'); }
       else { el.dataset.armed = '1'; el.textContent = 'Tap again to reset'; setTimeout(() => { if (el.isConnected) { delete el.dataset.armed; el.textContent = 'Reset all'; } }, 3000); }
