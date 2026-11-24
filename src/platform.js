@@ -19,7 +19,9 @@ export async function session() {
 
 export async function onAuthChange(fn) {
   const sb = await client(); if (!sb) return;
-  sb.auth.onAuthStateChange((_e, s) => fn(s));
+  // Supabase holds a lock while this callback runs; calling getSession() inside it
+  // deadlocks (the page sat on "Loading…"). Run our handler after the lock is released.
+  sb.auth.onAuthStateChange((_e, s) => { setTimeout(() => fn(s), 0); });
 }
 
 export async function signIn() {

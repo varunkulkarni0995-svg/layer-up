@@ -78,8 +78,9 @@ async function setting(sb, key, value) {
   if (error) alertBox(error.message); else load();
 }
 function alertBox(msg) { const d = document.createElement('div'); d.className = 'toast'; d.setAttribute('role', 'alert'); d.textContent = msg; document.body.append(d); setTimeout(() => d.remove(), 4000); }
-platform.onAuthChange(() => load());
-load();
+const safeLoad = () => load().catch(e => show(`<section class="card"><div class="banner" role="alert">Couldn't load: ${esc(e?.message || e)}</div><button class="pill-btn" id="retry">Try again</button></section>`, () => $('#retry').onclick = safeLoad));
+platform.onAuthChange(() => safeLoad());
+safeLoad();
 </script>
 </body>
 </html>
