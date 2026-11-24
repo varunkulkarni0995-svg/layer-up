@@ -24,10 +24,24 @@ test('normalise clamps out-of-range numbers', () => {
   assert.equal(r.garment.dressy, 10);
 });
 
-test('normalise rejects an unknown slot by falling back to outer', () => {
+test('normalise turns an unknown slot into a rejection, never a coat', () => {
   const r = normalise({ ...good, garment: { ...good.garment, slot: 'trousers' } });
-  assert.ok(SLOTS.includes(r.garment.slot));
-  assert.equal(r.garment.slot, 'outer');
+  assert.equal(r.usable, false);
+  assert.equal(r.reject_reason, 'no_garment');
+  assert.equal(gate(r).verdict, 'reject');
+});
+
+test('a shoe has its own feet slot', () => {
+  assert.ok(SLOTS.includes('feet'));
+  const r = normalise({ ...good, garment: { ...good.garment, name: 'White sneaker', slot: 'feet' } });
+  assert.equal(r.usable, true);
+  assert.equal(r.garment.slot, 'feet');
+});
+
+test('too_far is a named reason with its own instruction', () => {
+  assert.match(REJECT_REASONS.too_far, /move closer/i);
+  const r = normalise({ usable: false, reject_reason: 'too_far', garment: null, confidence: null, visible_evidence: [], clarify: null });
+  assert.equal(gate(r).reason, 'too_far');
 });
 
 test('normalise returns null when usable is true but there is no garment', () => {
@@ -153,8 +167,18 @@ test('buildPrompt switches to the user wardrobe once it has enough items', () =>
   assert.match(p, /Puffer 8/);
 });
 
-test('buildPrompt forbids unobservable claims', () => {
-  assert.match(buildPrompt([]), /never name a brand/i);
+test('buildPrompt forbids guessing, allows a legible label only as evidence', () => {
+  const p = buildPrompt([]);
+  assert.match(p, /do not guess a brand/i);
+  assert.match(p, /label reads/i);
+  assert.match(p, /keep any brand out of the name/i);
+});
+
+test('buildPrompt names feet and the non-clothing fabrics', () => {
+  const p = buildPrompt([]);
+  assert.match(p, /feet = shoes/);
+  assert.match(p, /blanket, towel/);
+  assert.match(p, /too_far/);
 });
 
 /* ---------- gemini schema translation ---------- */

@@ -1,5 +1,5 @@
-// Settings storage. Milestone 1: this browser only (localStorage).
-// Milestone 2 swaps this file for Supabase so phone and laptop share one profile.
+// Settings storage: this browser (localStorage). When signed in, the wardrobe is
+// also synced to the shared backend (platform.js) so phone and laptop match.
 import { DEFAULT_WARDROBE, DEFAULT_TOLERANCE } from './wardrobe.js';
 import { ACTIVITIES, DEFAULT_ACTIVITIES } from './mapper.js';
 
@@ -13,8 +13,9 @@ export const DEFAULT_SETTINGS = {
   wardrobe: DEFAULT_WARDROBE.map(i => ({ ...i })),
   places: [],        // saved/recent: { name, detail, lat, lon }
   lastPlace: null,   // { name, lat, lon, source }
-  provider: 'gemini',          // which vision model reads garment photos
-  aiKeys: {},                  // { gemini|openai|anthropic: key } — this browser only, never sent anywhere but that provider
+  aiMode: 'server',            // 'server' = Layer Up's keys, after Varun approves you; 'own' = your keys
+  provider: 'gemini',          // kept for the eval page
+  aiKeys: {},                  // { gemini, groq } — this browser only, never sent anywhere but that provider
   aiModels: {},                // optional per-provider model override
   evalLog: []                  // { at, provider, model, proposed, final, confidence, evidence, changed }
 };
@@ -33,7 +34,8 @@ export function loadSettings(storage = safeStorage()) {
       tolerance: { ...DEFAULT_SETTINGS.tolerance, ...(s.tolerance || {}) },
       units: { ...DEFAULT_SETTINGS.units, ...(s.units || {}) },
       wardrobe: Array.isArray(s.wardrobe) && s.wardrobe.length ? s.wardrobe : clone(DEFAULT_SETTINGS.wardrobe),
-      provider: s.provider in { gemini: 1, openai: 1, anthropic: 1 } ? s.provider : 'gemini',
+      aiMode: s.aiMode === 'own' ? 'own' : (s.aiMode === 'server' ? 'server' : (Object.values(s.aiKeys || {}).some(Boolean) ? 'own' : 'server')),
+      provider: s.provider in { gemini: 1, groq: 1, openai: 1, anthropic: 1 } ? s.provider : 'gemini',
       aiKeys: { ...(s.aiKeys || {}) },
       aiModels: { ...(s.aiModels || {}) },
       evalLog: Array.isArray(s.evalLog) ? s.evalLog : []

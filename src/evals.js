@@ -69,6 +69,18 @@ export function scoreCorrectness(runs) {
 }
 
 /**
+ * Terms a photo cannot support, unless the model's own evidence attributes that
+ * exact term to a legible label ("label reads LEVI STRAUSS & CO.").
+ */
+export function unsupportedClaims(result, banned) {
+  const g = result?.garment; if (!g) return [];
+  const labelEvidence = (result.visible_evidence || []).filter(e => /\blabel\b|\btag\b/i.test(e)).join(' ').toLowerCase();
+  const re = new RegExp(banned.source, 'gi');
+  const found = [g.name, g.warmth_basis, ...(result.visible_evidence || [])].join(' ').match(re) || [];
+  return [...new Set(found.map(t => t.toLowerCase()))].filter(t => !labelEvidence.includes(t));
+}
+
+/**
  * Negative fixtures carry truth === null and must be rejected.
  * `evidenceChecked` is the human spot-check: { checked, matched }.
  */
@@ -79,10 +91,7 @@ export function scoreHallucination(runs, evidenceChecked = null) {
   // Claims a photo cannot support. Cheap textual screen that catches the common case.
   const BANNED = /\b(merino|cashmere|gore[- ]?tex|polyester|\d{1,3}\s?%|nike|adidas|uniqlo|patagonia|zara|machine wash|dry clean)\b/i;
   const positives = runs.filter(r => r.result?.garment);
-  const offenders = positives.filter(r => {
-    const text = [r.result.garment.name, r.result.garment.warmth_basis, ...(r.result.visible_evidence || [])].join(' ');
-    return BANNED.test(text);
-  });
+  const offenders = positives.filter(r => unsupportedClaims(r.result, BANNED).length > 0);
 
   return {
     negatives: negatives.length,

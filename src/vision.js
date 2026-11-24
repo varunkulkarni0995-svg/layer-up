@@ -1,8 +1,10 @@
 // Vision client. One interface, one adapter per provider.
 //
-// The key belongs to the user and never leaves their browser except to go to the
-// provider they chose. There is no server in this path — which is also why the
-// repo can stay public.
+// Two ways in:
+//  - Own key: the key stays in the user's browser and goes only to the provider.
+//  - Server access: the same code runs inside the platform's ai-gateway function,
+//    which holds the keys. Nothing here touches the DOM at import time, so the
+//    server bundles this exact file.
 //
 // Every adapter asks for the SAME JSON Schema (garment.js) using whatever
 // structured-output mechanism that provider offers, so the parsed result is
@@ -13,9 +15,15 @@ import { GARMENT_SCHEMA, buildPrompt, normalise } from './garment.js';
 export const PROVIDERS = {
   gemini: {
     label: 'Gemini',
-    defaultModel: 'gemini-2.0-flash',
+    defaultModel: 'gemini-3.5-flash',
     keyHint: 'Starts with AIza. From aistudio.google.com',
     docs: 'https://aistudio.google.com/apikey'
+  },
+  groq: {
+    label: 'Groq',
+    defaultModel: 'qwen/qwen3.8-27b',
+    keyHint: 'Starts with gsk_. From console.groq.com',
+    docs: 'https://console.groq.com/keys'
   },
   openai: {
     label: 'OpenAI',
@@ -32,9 +40,10 @@ export const PROVIDERS = {
 };
 
 export class VisionError extends Error {
-  constructor(message, { kind = 'unknown', status = 0, provider = '' } = {}) {
+  constructor(message, { kind = 'unknown', status = 0, provider = '', retryAfter = 0 } = {}) {
     super(message);
-    this.kind = kind;            // auth | rate | network | parse | server | unknown
+    this.retryAfter = retryAfter; // seconds, from a 429's Retry-After header
+    this.kind = kind;            // auth | rate | network | timeout | parse | server | unknown
     this.status = status;
     this.provider = provider;
   }
@@ -59,25 +68,34 @@ export async function analyseGarment(opts) {
   const started = Date.now();
 
   const adapter = ADAPTERS[provider];
-  const req = adapter.request({ base64, mediaType, prompt, model, apiKey });
+  const req = adapter.request({ base64, mediaType, prompt: prompt + (opts.repair ? REPAIR_NOTE : ''), model, apiKey });
+
+  // One slow provider must not hold the user for minutes (146 s was seen on 23 Nov).
+  const timeoutMs = opts.timeoutMs ?? 45000;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  if (signal) signal.addEventListener('abort', () => ctl.abort(), { once: true });
 
   let res;
   try {
-    res = await doFetch(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body), signal });
+    res = await doFetch(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body), signal: ctl.signal });
   } catch (e) {
-    if (e?.name === 'AbortError') throw e;
+    clearTimeout(timer);
+    if (signal?.aborted) throw e;
+    if (e?.name === 'AbortError') throw new VisionError(PROVIDERS[provider].label + ' took too long to answer.', { kind: 'timeout', provider });
     throw new VisionError('Could not reach ' + PROVIDERS[provider].label + '. Check your connection.', { kind: 'network', provider });
   }
+  clearTimeout(timer);
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new VisionError(describeHttp(res.status, text, provider), {
       kind: res.status === 401 || res.status === 403 ? 'auth' : res.status === 429 ? 'rate' : res.status >= 500 ? 'server' : 'unknown',
-      status: res.status, provider
+      status: res.status, provider, retryAfter: Number(res.headers?.get?.('retry-after')) || 0
     });
   }
 
-  const payload = await res.json();
+  const payload = await res.json().catch(() => null);
   let raw;
   try {
     raw = adapter.extract(payload);
@@ -91,9 +109,55 @@ export async function analyseGarment(opts) {
   return { result, raw, meta: { provider, model, ms: Date.now() - started } };
 }
 
+const REPAIR_NOTE = '\n\nYour previous reply could not be parsed. Return only the JSON object, nothing else.';
+
+/**
+ * Read a garment with fallbacks and retries.
+ * steps: [{ provider, apiKey, model? }] in order — primary first (Gemini), then backup (Groq).
+ *
+ * Per step, at most two attempts:
+ *  - unparseable reply  → retry once on the same provider, asking for JSON only
+ *  - 429 rate limit     → wait (Retry-After, capped at 8 s, else 2 s), retry once
+ *  - 5xx, network, timeout → wait 1 s, retry once
+ *  - bad key (401/403)  → no retry; go straight to the next provider
+ * Then the next step. Every attempt is returned in `attempts` for the log.
+ */
+export async function readGarment({ steps, dataUrl, wardrobe = [], fetchImpl, sleep = ms => new Promise(r => setTimeout(r, ms)), timeoutMs, signal }) {
+  const usable = (steps || []).filter(s => s && PROVIDERS[s.provider] && s.apiKey);
+  if (!usable.length) throw new VisionError('No AI key is set up.', { kind: 'auth' });
+  const attempts = [];
+  let last;
+  for (const step of usable) {
+    let repair = false;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const t0 = Date.now();
+      try {
+        const out = await analyseGarment({ ...step, dataUrl, wardrobe, fetchImpl, timeoutMs, signal, repair });
+        attempts.push({ provider: step.provider, model: out.meta.model, ok: true, ms: Date.now() - t0 });
+        return { ...out, attempts, meta: { ...out.meta, fallback: step !== usable[0], tries: attempts.length } };
+      } catch (e) {
+        if (signal?.aborted) throw e;
+        last = e;
+        attempts.push({ provider: step.provider, model: step.model || PROVIDERS[step.provider].defaultModel, ok: false, kind: e.kind || 'unknown', status: e.status || 0, ms: Date.now() - t0 });
+        if (attempt === 2 || e.kind === 'auth') break;
+        if (e.kind === 'parse') { repair = true; continue; }
+        if (e.kind === 'rate') { await sleep(Math.min(8, e.retryAfter || 2) * 1000); continue; }
+        if (e.kind === 'server' || e.kind === 'network' || e.kind === 'timeout') { await sleep(1000); continue; }
+        break; // 4xx we do not understand: retrying the same request will not help
+      }
+    }
+  }
+  const err = new VisionError(
+    usable.length > 1 ? `Couldn't read the photo — ${usable.map(s => PROVIDERS[s.provider].label).join(' and ')} both failed. ${last?.message || ''}`.trim()
+      : last?.message || 'Could not read the photo.',
+    { kind: last?.kind || 'unknown', status: last?.status || 0 });
+  err.attempts = attempts;
+  throw err;
+}
+
 /* ---------- Adapters ---------- */
 
-const ADAPTERS = {
+export const ADAPTERS = {
   // https://ai.google.dev — responseSchema forces the shape.
   gemini: {
     request({ base64, mediaType, prompt, model, apiKey }) {
@@ -113,6 +177,39 @@ const ADAPTERS = {
     extract(payload) {
       const text = payload?.candidates?.[0]?.content?.parts?.map(p => p.text).filter(Boolean).join('');
       return JSON.parse(text);
+    }
+  },
+
+  // OpenAI-compatible. Groq's vision model takes JSON mode, not schema mode, so the
+  // schema rides in the prompt and normalise() + the gate do the enforcing.
+  groq: {
+    request({ base64, mediaType, prompt, model, apiKey }) {
+      return {
+        url: 'https://api.groq.com/openai/v1/chat/completions',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+        body: {
+          model,
+          temperature: 0,
+          max_tokens: 1500,
+          ...(/qwen|gpt-oss/i.test(model) ? { reasoning_effort: 'low' } : {}),
+          response_format: { type: 'json_object' },
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'text', text: prompt + '\n\nReturn one JSON object matching this JSON Schema:\n' + JSON.stringify(GARMENT_SCHEMA) },
+              { type: 'image_url', image_url: { url: `data:${mediaType};base64,${base64}` } }
+            ]
+          }]
+        }
+      };
+    },
+    extract(payload) {
+      const text = String(payload?.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+      try { return JSON.parse(text); } catch (_) {
+        const m = text.match(/\{[\s\S]*\}/);
+        if (!m) throw new Error('no JSON');
+        return JSON.parse(m[0]);
+      }
     }
   },
 
@@ -158,7 +255,7 @@ const ADAPTERS = {
         },
         body: {
           model,
-          max_tokens: 1024,
+          max_tokens: 2048,
           temperature: 0,
           tools: [{ name: 'record_garment', description: 'Record the reading of this garment.', input_schema: GARMENT_SCHEMA }],
           tool_choice: { type: 'tool', name: 'record_garment' },

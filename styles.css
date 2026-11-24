@@ -36,9 +36,9 @@ h1 { margin: 0; font-size: 30px; font-weight: 800; letter-spacing: -.02em; }
 .between { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 
 /* Controls */
-.pill-btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 7px 12px; font-weight: 600; font-size: 14px; min-height: 36px; }
+.pill-btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 7px 12px; font-weight: 600; font-size: 14px; min-height: 44px; }
 .pill-btn.primary { background: var(--accent); border-color: var(--accent); font-weight: 700; }
-.chip { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 600; min-height: 34px; }
+.chip { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 600; min-height: 44px; }
 .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--ink); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .link { border: 0; background: none; color: var(--blue); font-weight: 600; padding: 4px 0; }
@@ -46,7 +46,7 @@ h1 { margin: 0; font-size: 30px; font-weight: 800; letter-spacing: -.02em; }
 .field { display: flex; flex-direction: column; gap: 5px; font-size: 13px; font-weight: 600; color: var(--muted); }
 .field input[type=text], .field input[type=search], .field select { font: 600 15px var(--display); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; padding: 11px 12px; background: var(--sunk); width: 100%; }
 .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; background: #E2E7E3; border-radius: 10px; padding: 3px; }
-.seg button { border: 0; border-radius: 8px; padding: 7px 4px; font-size: 13px; font-weight: 600; background: transparent; color: var(--muted); min-height: 34px; }
+.seg button { border: 0; border-radius: 8px; padding: 7px 4px; font-size: 13px; font-weight: 600; background: transparent; color: var(--muted); min-height: 44px; }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--night-ink); }
 
 /* Today hero */
@@ -136,3 +136,10 @@ h1 { margin: 0; font-size: 30px; font-weight: 800; letter-spacing: -.02em; }
 .row .pill-btn { flex: 1; justify-content: center; }
 input[type=file] { font: 500 15px Archivo, sans-serif; padding: 12px; background: var(--sunk); border: 1px dashed var(--line); border-radius: 12px; width: 100%; box-sizing: border-box; }
 .ver { font-size: 11px; color: var(--muted); font-weight: 500; }
+
+/* v0.3: version tag, server-access status */
+.ver-tag { position: absolute; top: max(6px, env(safe-area-inset-top)); right: 10px; font-size: 10px; color: var(--muted); font-weight: 500; z-index: 5; pointer-events: none; }
+.status { font-size: 15px; font-weight: 600; margin: 8px 0; padding: 10px 12px; border-radius: 10px; }
+.status.ok { background: #E6F4EA; color: #1E6B34; }
+.status.wait { background: #FFF6E0; color: #7A5A00; }
+.status.no { background: #FDECEC; color: #9B2C2C; }

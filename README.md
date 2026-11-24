@@ -7,7 +7,7 @@ What to wear today, based on how the weather **feels**, how you're getting aroun
 | Milestone | Scope | Status |
 |---|---|---|
 | 1 | Mapper, live weather, device location, Outfit / Trip / Settings | Done |
-| 2 | Supabase: Google login (owner only), profile + wardrobe sync, 10-day activity log | Next |
+| 2 | Add a garment by photo (v0.3): Gemini → Groq backup with retries; own key **or** server access approved by Varun; Google sign-in; wardrobe sync; 10-day AI log; [control page](control.html) | Built — waiting on backend setup |
 | 3 | Ask chat via Supabase Edge Function + Gemini, unlocked with a passkey (Face ID / Touch ID) | Planned |
 
 ## How it decides
@@ -84,3 +84,15 @@ Calibration is what makes the other two actionable: the confidence floors in
 move the floors before touching the prompt.
 
 Every call spends your own credits, so nothing runs until you press Run.
+
+
+## Photo reading (v0.3)
+
+Two ways to read a garment photo, chosen in **Settings → AI for photos**:
+
+| Mode | Keys | Who can use it |
+|---|---|---|
+| Layer Up server | Held by the shared backend (`varun-platform` on Supabase, function `ai-gateway`) | Signed-in users that Varun approves on `control.html` |
+| My own key | Gemini (tried first) and optionally Groq (backup), stored in that browser only | Anyone |
+
+Either way the same code runs (`src/vision.js → readGarment`): Gemini first, retry once on a bad reply, a 429 (waits for Retry-After, max 8 s), a 5xx, a network drop or a 45 s timeout; a bad key skips straight to Groq (`qwen/qwen3.8-27b`). The server adds approval, on/off switches, daily limits (300 a day overall, 40 per user, none for Varun) and logs every call for 10 days.

@@ -3,7 +3,9 @@ import { recommend, extrasThreshold, rainThreshold, ACTIVITIES, OCCASIONS } from
 import { fetchForecast, upcomingHours, hoursBetween, describeCode, localNowIso } from './weather.js';
 import { getDeviceLocation, searchPlaces, placeLabel } from './location.js';
 import { loadSettings, saveSettings, rememberPlace, DEFAULT_SETTINGS } from './store.js';
-import { analyseGarment, prepareImage, makeThumbnail, PROVIDERS, VisionError } from './vision.js';
+import { readGarment, prepareImage, makeThumbnail, PROVIDERS, VisionError } from './vision.js';
+import { VERSION, platformReady } from './config.js';
+import * as platform from './platform.js';
 import { gate, applyAnswer, toWardrobeItem, diffProposal, SLOTS } from './garment.js';
 
 const NYC = { name: 'New York', lat: 40.7128, lon: -74.006, source: 'default' };
@@ -18,6 +20,7 @@ const state = {
   sel: null,                     // [start, end] indexes into upcoming hours
   sheet: null,                   // 'location' | 'photo'
   photo: null,                   // { stage, dataUrl, thumb, result, gate, garment, answer, error, meta }
+  acct: { session: null, status: 'none', busy: false, error: null },   // server access
   trip: { place: null, day: 0, hour: null, duration: 2, activity: null, occasion: 'casual', result: null, loading: false, error: null }
 };
 
@@ -36,7 +39,7 @@ const toMapperHours = hrs => hrs.map(h => ({ time: fmtHour(h.hour), feelsC: h.fe
 const activityButtons = (current, action) => state.settings.activities.filter(k => ACTIVITIES[k])
   .map(k => `<button type="button" aria-pressed="${current === k}" data-action="${action}" data-v="${k}">${ACTIVITIES[k].label}</button>`).join('');
 
-function save() { saveSettings(state.settings); }
+function save() { saveSettings(state.settings); pushWardrobe(); }
 function toast(msg) {
   const t = document.createElement('div'); t.className = 'toast'; t.setAttribute('role', 'status'); t.textContent = msg;
   document.body.append(t); setTimeout(() => t.remove(), 3200);
@@ -374,10 +377,10 @@ function renderSettings() {
     <section class="card"><div class="eyebrow">Default activity</div><div class="seg" role="group" aria-label="Default activity">${acts}</div></section>
     <section class="card"><div class="between"><div class="eyebrow">My wardrobe · warmth 0–10</div><span class="hint">Umbrella: always in bag</span></div>
       <button type="button" class="pill-btn primary" data-action="add-photo" style="width:100%;justify-content:center;margin:4px 0 2px">${icon.camera}Add by photo</button>
-      <p class="hint" style="font-size:13px;margin:0">${keyReady() ? 'Snap a garment and check what it proposes.' : 'Add an API key below to turn this on.'}</p>
+      <p class="hint" style="font-size:13px;margin:0">${aiReady() ? 'Snap a garment and check what it proposes.' : 'Set up photo reading under “AI for photos” below.'}</p>
       ${ward}</section>
-    <section class="card"><div class="eyebrow">AI key</div>${keySection()}</section>
-    <section class="card"><div class="between"><span class="hint">Saved on this device. Login + sync come in milestone 2.<br><span class="ver">Layer Up v0.2 · photo wardrobe</span></span>
+    <section class="card"><div class="eyebrow">AI for photos</div>${aiSection()}</section>
+    <section class="card"><div class="between"><span class="hint">${state.acct.session ? 'Wardrobe synced to your account.' : 'Saved on this device.'}<br><span class="ver">Layer Up ${VERSION}</span></span>
       <button type="button" class="link" data-action="reset-all" id="resetAll" style="color:var(--bad)">Reset all</button></div></section>`;
 }
 
@@ -387,16 +390,10 @@ function wireSettings() {
     el.addEventListener('input', () => { const v = Number(el.value); state.settings.tolerance[k] = v; $('#val-' + k).textContent = sign(v); $('#eff-' + k).textContent = TOL[k].effect(v); });
     el.addEventListener('change', save);
   });
-  const key = $('#aiKey');
-  if (key) key.addEventListener('change', () => {
-    state.settings.aiKeys = { ...(state.settings.aiKeys || {}), [state.settings.provider]: key.value.trim() };
+  document.querySelectorAll('[data-key]').forEach(el => el.addEventListener('change', () => {
+    state.settings.aiKeys = { ...(state.settings.aiKeys || {}), [el.dataset.key]: el.value.trim() };
     save(); render();
-  });
-  const mdl = $('#aiModel');
-  if (mdl) mdl.addEventListener('change', () => {
-    state.settings.aiModels = { ...(state.settings.aiModels || {}), [state.settings.provider]: mdl.value.trim() };
-    save();
-  });
+  }));
   document.querySelectorAll('[data-ward]').forEach(el => {
     const item = state.settings.wardrobe.find(i => i.id === el.dataset.ward), f = el.dataset.f;
     if (f === 'warmth') {
@@ -421,25 +418,85 @@ function renderAsk() {
 
 /* ---------- Add a garment by photo ---------- */
 const keyFor = p => (state.settings.aiKeys || {})[p] || '';
-const keyReady = () => !!keyFor(state.settings.provider);
+const ownSteps = () => ['gemini', 'groq'].map(p => ({ provider: p, apiKey: keyFor(p), model: (state.settings.aiModels || {})[p] || undefined }));
+const aiReady = () => state.settings.aiMode === 'own'
+  ? ownSteps().some(s => s.apiKey)
+  : state.acct.status === 'approved';
 
-function keySection() {
-  const s = state.settings, p = s.provider, meta = PROVIDERS[p];
-  const has = keyFor(p);
-  const picker = Object.entries(PROVIDERS).map(([k, v]) =>
-    `<button type="button" data-action="provider" data-v="${k}" aria-pressed="${p === k}">${v.label}</button>`).join('');
-  return `<div class="seg" role="group" aria-label="AI provider" style="width:100%">${picker}</div>
-    <label class="sr" for="aiKey">${esc(meta.label)} API key</label>
-    <div class="field"><input id="aiKey" type="password" autocomplete="off" spellcheck="false"
-      placeholder="${esc(meta.keyHint)}" value="${esc(has)}"></div>
-    <div class="between">
-      <span class="hint" style="font-size:13px">Stored in this browser only. Never sent anywhere but ${esc(meta.label)}.</span>
-      ${has ? '<button type="button" class="link" data-action="clear-key" style="color:var(--bad)">Clear</button>' : ''}
-    </div>
-    <label class="sr" for="aiModel">Model</label>
-    <div class="field"><input id="aiModel" type="text" autocomplete="off" spellcheck="false"
-      placeholder="${esc(meta.defaultModel)}" value="${esc((s.aiModels || {})[p] || '')}"></div>
-    <p class="hint" style="font-size:13px;margin:0">Leave blank for ${esc(meta.defaultModel)}. <a href="/eval.html">Run the evals →</a></p>`;
+function aiSection() {
+  const mode = state.settings.aiMode;
+  const seg = `<div class="seg" role="group" aria-label="How photos are read" style="width:100%">
+    <button type="button" data-action="ai-mode" data-v="server" aria-pressed="${mode === 'server'}">Layer Up server</button>
+    <button type="button" data-action="ai-mode" data-v="own" aria-pressed="${mode === 'own'}">My own key</button></div>`;
+  return seg + (mode === 'own' ? ownKeySection() : serverSection());
+}
+
+function ownKeySection() {
+  const row = (p, label, hint) => {
+    const has = keyFor(p);
+    return `<label for="key-${p}" style="font-size:15px;font-weight:700">${label}</label>
+      <div class="field"><input id="key-${p}" data-key="${p}" type="password" autocomplete="off" spellcheck="false"
+        placeholder="${esc(PROVIDERS[p].keyHint)}" value="${esc(has)}"></div>
+      <div class="between"><span class="hint" style="font-size:13px">${hint} <a href="${PROVIDERS[p].docs}" target="_blank" rel="noopener">Get a key</a></span>
+        ${has ? `<button type="button" class="link" data-action="clear-key" data-p="${p}" style="color:var(--bad)">Clear</button>` : ''}</div>`;
+  };
+  return row('gemini', 'Gemini key', 'Tried first.') + row('groq', 'Groq key (backup, optional)', 'Used if Gemini fails.') +
+    `<p class="hint" style="font-size:13px;margin:0">Stored in this browser only, and sent only to Google or Groq. <a href="/eval.html">Run the evals →</a></p>`;
+}
+
+function serverSection() {
+  const a = state.acct;
+  if (!platformReady()) return `<p class="hint" style="font-size:14px">The Layer Up server isn't switched on yet. Use your own key for now.</p>`;
+  const who = a.session ? `<div class="between"><span class="hint" style="font-size:13px">Signed in as ${esc(a.session.user.email)}</span>
+      <button type="button" class="link" data-action="sign-out">Sign out</button></div>` : '';
+  const err = a.error ? `<div class="banner" role="alert">${esc(a.error)}</div>` : '';
+  const busy = a.busy ? ' disabled aria-busy="true"' : '';
+  let body;
+  if (!a.session) body = `<p class="hint" style="font-size:14px">Use Layer Up's own AI — no key needed. Sign in, then ask Varun for access; he approves each person.</p>
+      <button type="button" class="pill-btn primary" data-action="sign-in"${busy} style="width:100%;justify-content:center">Sign in with Google</button>`;
+  else if (a.status === 'approved') body = `<p class="status ok" role="status">✓ Approved. Photos are read on the Layer Up server — Gemini first, Groq as backup.</p>`;
+  else if (a.status === 'pending') body = `<p class="status wait" role="status">⏳ Request sent. Waiting for Varun to approve you.</p>
+      <p class="hint" style="font-size:13px;margin:0">You can still add clothes manually, or use your own key meanwhile.</p>
+      <button type="button" class="pill-btn" data-action="check-access"${busy}>Check again</button>`;
+  else body = `${a.status === 'declined' ? '<p class="status no" role="status">Not approved this time. You can ask again.</p>' : ''}
+      <label for="accessNote" style="font-size:15px;font-weight:700">Note to Varun <span class="hint">(optional)</span></label>
+      <div class="field"><input id="accessNote" type="text" maxlength="200" placeholder="e.g. Yifan from HCI"></div>
+      <button type="button" class="pill-btn primary" data-action="request-access"${busy} style="width:100%;justify-content:center">${a.status === 'declined' ? 'Ask again' : 'Request access'}</button>`;
+  return err + body + who;
+}
+
+async function refreshAccount() {
+  if (!platformReady()) return;
+  try {
+    state.acct.session = await platform.session();
+    state.acct.status = state.acct.session ? await platform.accessStatus() : 'none';
+    state.acct.error = null;
+    if (state.acct.session) await pullWardrobe();
+  } catch (e) { state.acct.error = 'Could not reach the Layer Up server.'; }
+  render();
+}
+
+async function acctAction(fn) {
+  state.acct.busy = true; state.acct.error = null; render();
+  try { await fn(); } catch (e) { state.acct.error = e?.message || 'Something went wrong.'; }
+  state.acct.busy = false; render();
+}
+
+/* Wardrobe sync: the account copy wins when it exists; otherwise this device's copy is uploaded. */
+async function pullWardrobe() {
+  const remote = await platform.loadWardrobe();
+  if (remote && Array.isArray(remote.items) && remote.items.length) {
+    state.settings.wardrobe = remote.items;
+    state.settings.evalLog = Array.isArray(remote.eval_log) ? remote.eval_log : state.settings.evalLog;
+    saveSettings(state.settings);
+  } else await platform.saveWardrobe(state.settings.wardrobe, state.settings.evalLog);
+}
+let pushTimer = null;
+function pushWardrobe() {
+  if (!state.acct.session) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => platform.saveWardrobe(state.settings.wardrobe, state.settings.evalLog)
+    .catch(() => toast("Couldn't sync your wardrobe — it's saved on this device")), 800);
 }
 
 function renderPhotoSheet(root) {
@@ -447,9 +504,10 @@ function renderPhotoSheet(root) {
   const body = {
     capture: () => `<p class="hint">Lay the garment flat, or hang it against a plain wall. One item at a time.</p>
       <label class="sr" for="photoFile">Choose a photo</label>
-      <input id="photoFile" type="file" accept="image/*" capture="environment">`,
+      <input id="photoFile" type="file" accept="image/*" capture="environment" aria-describedby="photoPrivacy">
+      <p class="hint" id="photoPrivacy" style="font-size:13px;margin:0">🔒 The photo is sent to ${state.settings.aiMode === 'own' ? 'Google Gemini (or Groq as backup)' : 'the Layer Up server and Google Gemini (or Groq as backup)'} to be read. Only a small thumbnail is kept; nothing else leaves your device.</p>`,
     working: () => `<div class="shot">${ph.dataUrl ? `<img src="${ph.dataUrl}" alt="">` : ''}</div>
-      <p class="hint">Reading it with ${esc(PROVIDERS[state.settings.provider].label)}…</p>`,
+      <p class="hint" role="status">${esc(ph.note || 'Reading it…')}</p>`,
     reject: () => `<div class="shot">${ph.dataUrl ? `<img src="${ph.dataUrl}" alt="">` : ''}</div>
       <div class="banner">${esc(ph.gate.message)}</div>
       <div class="row">
@@ -511,7 +569,7 @@ function confirmForm(ph) {
       <button type="button" class="pill-btn primary" data-action="photo-save">Save to wardrobe</button>
       <button type="button" class="pill-btn" data-action="photo-retake">Retake</button>
     </div>
-    <p class="hint" style="font-size:12px;margin:0">${esc(ph.meta ? `${PROVIDERS[ph.meta.provider].label} · ${ph.meta.model} · ${(ph.meta.ms / 1000).toFixed(1)}s` : '')}</p>
+    <p class="hint" style="font-size:12px;margin:0">${esc(ph.meta ? `${PROVIDERS[ph.meta.provider]?.label || ph.meta.provider}${ph.meta.fallback ? ' (backup)' : ''} · ${ph.meta.model} · ${(ph.meta.ms / 1000).toFixed(1)}s${ph.meta.via === 'server' ? ' · server' : ''}` : '')}</p>
   </div>`;
 }
 
@@ -529,20 +587,21 @@ function wireConfirm() {
 }
 
 async function runPhoto(file) {
-  const provider = state.settings.provider;
   state.photo = { stage: 'working' };
   renderSheet();
   try {
     const { dataUrl } = await prepareImage(file);
-    state.photo = { stage: 'working', dataUrl };
+    state.photo = { stage: 'working', dataUrl, note: 'Reading it…' };
     renderSheet();
-
-    const { result, meta } = await analyseGarment({
-      dataUrl, provider,
-      apiKey: keyFor(provider),
-      model: (state.settings.aiModels || {})[provider] || undefined,
-      wardrobe: state.settings.wardrobe
-    });
+    // If the first provider is slow, say so rather than leaving a silent spinner.
+    const slow = setTimeout(() => { if (state.photo?.stage === 'working') { state.photo.note = 'Still reading — this one is taking a while…'; renderSheet(); } }, 12000);
+    let out;
+    try {
+      out = state.settings.aiMode === 'own'
+        ? await readGarment({ steps: ownSteps(), dataUrl, wardrobe: state.settings.wardrobe })
+        : await platform.readGarmentViaServer({ dataUrl, wardrobe: state.settings.wardrobe });
+    } finally { clearTimeout(slow); }
+    const { result, meta } = out;
     const verdict = gate(result);
     const thumb = await makeThumbnail(dataUrl).catch(() => null);
     state.photo = {
@@ -552,7 +611,8 @@ async function runPhoto(file) {
       stage: verdict.verdict === 'reject' ? 'reject' : verdict.verdict === 'ask' ? 'ask' : 'confirm'
     };
   } catch (e) {
-    state.photo = { ...state.photo, stage: 'error', error: e instanceof VisionError ? e.message : 'Something went wrong reading that photo.' };
+    if (e?.why === 'not_approved' || e?.why === 'signed_out') { state.acct.status = e.why === 'signed_out' ? 'none' : state.acct.status; }
+    state.photo = { ...state.photo, stage: 'error', error: e instanceof VisionError || e instanceof platform.GatewayError ? e.message : 'Something went wrong reading that photo.' };
   }
   renderSheet();
 }
@@ -566,7 +626,7 @@ function savePhotoGarment() {
   if (ph.proposed) {
     const d = diffProposal(ph.proposed, ph.garment);
     state.settings.evalLog = [...(state.settings.evalLog || []), {
-      at: Date.now(), provider: ph.meta?.provider, model: ph.meta?.model,
+      at: Date.now(), provider: ph.meta?.provider, model: ph.meta?.model, via: ph.meta?.via || 'own',
       proposed: ph.proposed, final: { ...ph.garment },
       confidence: ph.result?.confidence || null,
       evidence: ph.result?.visible_evidence || [],
@@ -621,7 +681,7 @@ document.addEventListener('click', e => {
     case 'trip-quick': { const p = quickPlaces()[i]; state.trip.place = { name: p.name, detail: p.detail || '', lat: p.lat, lon: p.lon }; state.trip.error = null; state.trip.result = null; keepTripInputs(); render(); break; }
     case 'trip-place': { const p = state._tripResults[i]; state.trip.place = p; state.trip.error = null; state.trip.result = null; const out = $('#tripOut'); if (out) out.innerHTML = ''; $('#tripWhere').value = p.name; $('#tripResults').innerHTML = `<p class="hint">✓ ${esc(p.name)}${p.detail ? ', ' + esc(p.detail) : ''}</p>`; break; }
     case 'add-photo':
-      if (!keyReady()) { toast('Add an API key in Settings first'); break; }
+      if (!aiReady()) { toast(state.settings.aiMode === 'own' ? 'Add a Gemini or Groq key below first' : 'Server access needs Varun\u2019s approval first — see “AI for photos”'); break; }
       state.sheet = 'photo'; state.photo = { stage: 'capture' }; renderSheet(); break;
     case 'photo-retake': state.photo = { stage: 'capture' }; renderSheet(); break;
     case 'photo-manual': state.sheet = null; state.photo = null; render(); toast('Add it with the sliders below'); break;
@@ -633,12 +693,20 @@ document.addEventListener('click', e => {
     }
     case 'photo-skip-ask': state.photo.stage = 'confirm'; renderSheet(); break;
     case 'photo-save': savePhotoGarment(); break;
-    case 'provider': state.settings.provider = el.dataset.v; save(); render(); break;
+    case 'ai-mode': state.settings.aiMode = el.dataset.v; saveSettings(state.settings); render(); break;
     case 'clear-key': {
-      const p = state.settings.provider;
+      const p = el.dataset.p;
       state.settings.aiKeys = { ...(state.settings.aiKeys || {}), [p]: '' };
-      save(); render(); toast(PROVIDERS[p].label + ' key cleared'); break;
+      saveSettings(state.settings); render(); toast(PROVIDERS[p].label + ' key cleared'); break;
     }
+    case 'sign-in': acctAction(() => platform.signIn()); break;
+    case 'sign-out': acctAction(async () => { await platform.signOut(); state.acct.session = null; state.acct.status = 'none'; }); break;
+    case 'request-access': {
+      const note = $('#accessNote')?.value || '';
+      acctAction(async () => { state.acct.status = await platform.requestAccess(note); toast('Request sent to Varun'); });
+      break;
+    }
+    case 'check-access': acctAction(async () => { state.acct.status = await platform.accessStatus(); if (state.acct.status === 'approved') toast('You\u2019re approved'); }); break;
     case 'drop-item': {
       const id = el.dataset.id;
       state.settings.wardrobe = state.settings.wardrobe.filter(i => i.id !== id);
@@ -660,5 +728,8 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && st
 
 /* ---------- Start ---------- */
 render();
+document.getElementById('verTag')?.replaceChildren(document.createTextNode(VERSION));
+refreshAccount();
+platform.onAuthChange(() => refreshAccount());
 if (state.settings.lastPlace) { state.place = state.settings.lastPlace; loadWeather(); }
 else useDeviceLocation();

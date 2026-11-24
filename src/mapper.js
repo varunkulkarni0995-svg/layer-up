@@ -54,7 +54,7 @@ export function warmthNeed(hour, { activity = 'walk', tolerance = {} } = {}) {
 }
 
 function bySlot(wardrobe) {
-  const g = { base: [], mid: [], outer: [], head: [], hands: [], carry: [] };
+  const g = { base: [], mid: [], outer: [], head: [], hands: [], feet: [], carry: [] };
   wardrobe.forEach(i => (g[i.slot] || (g[i.slot] = [])).push(i));
   return g;
 }

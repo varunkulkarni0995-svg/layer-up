@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Control · Varun's apps</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="styles.css">
+<style>
+  body { background: var(--bg); } main { max-width: 640px; margin: 0 auto; padding: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; } td, th { text-align: left; padding: 8px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .sw { display: flex; justify-content: space-between; align-items: center; min-height: 44px; }
+  .sw input[type=checkbox] { width: 22px; height: 22px; } .num { width: 80px; min-height: 40px; font: inherit; }
+  .tag { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+  .tag.pending { background: #FFF6E0; color: #7A5A00; } .tag.approved { background: #E6F4EA; color: #1E6B34; } .tag.declined { background: #FDECEC; color: #9B2C2C; }
+</style>
+</head>
+<body>
+<main>
+  <div class="between"><h1 style="margin:8px 0">Control</h1><span class="ver" id="ver"></span></div>
+  <div id="out" aria-live="polite"><p class="hint">Loading…</p></div>
+</main>
+<script type="module">
+import { VERSION, PLATFORM, platformReady } from './src/config.js';
+import * as platform from './src/platform.js';
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+$('#ver').textContent = 'Control ' + VERSION;
+let D = null;
+
+async function load() {
+  if (!platformReady()) return show('<div class="card"><p>The backend is not configured yet.</p></div>');
+  const s = await platform.session();
+  if (!s) return show(`<section class="card"><p>Sign in with the admin Google account.</p>
+    <button class="pill-btn primary" id="in">Sign in with Google</button></section>`, () => $('#in').onclick = () => platform.signIn());
+  const sb = await platform.client();
+  const { data, error } = await sb.rpc('admin_overview');
+  if (error) return show(`<section class="card"><div class="banner" role="alert">${esc(s.user.email)} is not an admin.</div>
+    <button class="pill-btn" id="out1">Sign out</button></section>`, () => $('#out1').onclick = async () => { await platform.signOut(); load(); });
+  D = data; render(sb);
+}
+function show(html, wire) { $('#out').innerHTML = html; wire && wire(); }
+
+function render(sb) {
+  const S = D.settings, reqs = D.requests;
+  const pending = reqs.filter(r => r.status === 'pending');
+  const row = r => `<tr><td><b>${esc(r.email)}</b><br><span class="hint">${esc(r.app)}${r.note ? ' · “' + esc(r.note) + '”' : ''}<br>${new Date(r.requested_at).toLocaleString()}</span></td>
+    <td><span class="tag ${r.status}">${r.status}</span></td>
+    <td>${r.status !== 'approved' ? `<button class="pill-btn primary" data-dec="approved" data-u="${r.user_id}" data-a="${r.app}">Approve</button>` : ''}
+        ${r.status !== 'declined' ? `<button class="pill-btn" data-dec="declined" data-u="${r.user_id}" data-a="${r.app}">${r.status === 'approved' ? 'Revoke' : 'Decline'}</button>` : ''}</td></tr>`;
+  const sw = (k, label) => `<label class="sw"><span>${label}</span><input type="checkbox" data-sw="${k}" ${S[k] !== false ? 'checked' : ''}></label>`;
+  const num = (k, label) => `<label class="sw"><span>${label}</span><input class="num" type="number" min="1" data-num="${k}" value="${esc(S[k])}"></label>`;
+  show(`
+  <section class="card"><div class="eyebrow">Access requests · ${pending.length} waiting</div>
+    ${reqs.length ? `<table>${[...pending, ...reqs.filter(r => r.status !== 'pending')].map(row).join('')}</table>` : '<p class="hint">No requests yet.</p>'}</section>
+  <section class="card"><div class="eyebrow">Switches</div>
+    ${sw('ai_on', 'Server AI (all apps)')}${sw('gemini_on', 'Gemini — primary')}${sw('groq_on', 'Groq — backup')}</section>
+  <section class="card"><div class="eyebrow">Limits · today ${D.today} of ${esc(S.daily_cap)} calls</div>
+    ${num('daily_cap', 'All users per day')}${num('user_daily_cap', 'Each approved user per day')}
+    <p class="hint" style="font-size:13px">You have no per-user limit. Days reset at midnight New York time.</p>
+    ${D.today_by_user.length ? `<table>${D.today_by_user.map(u => `<tr><td>${esc(u.email || 'you')}</td><td>${esc(u.app)}</td><td>${u.calls}</td></tr>`).join('')}</table>` : ''}</section>
+  <section class="card"><div class="eyebrow">Last calls</div>
+    ${D.last_calls.length ? `<table>${D.last_calls.map(c => `<tr><td>${new Date(c.at).toLocaleTimeString()}</td><td>${esc(c.email || '')}</td><td>${c.ok ? '✓ ' + esc(c.provider) + ' · ' + (c.ms / 1000).toFixed(1) + 's' : '✕ ' + esc(c.error || '')}</td></tr>`).join('')}</table>` : '<p class="hint">None yet.</p>'}</section>
+  <p class="hint" style="font-size:13px">Logs are kept 10 days. <button class="link" id="so">Sign out</button></p>`, () => {
+    document.querySelectorAll('[data-dec]').forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      const { error } = await sb.from('access').update({ status: b.dataset.dec, decided_at: new Date().toISOString() }).eq('user_id', b.dataset.u).eq('app', b.dataset.a);
+      if (error) alertBox(error.message); load();
+    });
+    document.querySelectorAll('[data-sw]').forEach(c => c.onchange = () => setting(sb, c.dataset.sw, c.checked));
+    document.querySelectorAll('[data-num]').forEach(c => c.onchange = () => { const v = Math.max(1, Math.round(+c.value || 1)); setting(sb, c.dataset.num, v); });
+    $('#so').onclick = async () => { await platform.signOut(); load(); };
+  });
+}
+async function setting(sb, key, value) {
+  const { error } = await sb.from('settings').update({ value, updated_at: new Date().toISOString() }).eq('key', key);
+  if (error) alertBox(error.message); else load();
+}
+function alertBox(msg) { const d = document.createElement('div'); d.className = 'toast'; d.setAttribute('role', 'alert'); d.textContent = msg; document.body.append(d); setTimeout(() => d.remove(), 4000); }
+platform.onAuthChange(() => load());
+load();
+</script>
+</body>
+</html>

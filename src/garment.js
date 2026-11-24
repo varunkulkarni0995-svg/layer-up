@@ -4,7 +4,7 @@
 // Nothing here calls a network. Everything is pure so it can be tested and so the
 // eval harness scores exactly the logic the app runs.
 
-export const SLOTS = ['base', 'mid', 'outer', 'head', 'hands', 'carry'];
+export const SLOTS = ['base', 'mid', 'outer', 'head', 'hands', 'feet', 'carry'];
 
 export const REJECT_REASONS = {
   no_garment: "I can't find a garment here. Point the camera at one item of clothing.",
@@ -12,6 +12,7 @@ export const REJECT_REASONS = {
   too_dark: 'Too dark to make out the fabric. Try near a window, or turn a light on.',
   too_blurry: 'That came out blurry. Hold still for a second and tap to focus.',
   too_close: 'I can only see part of it. Step back so the whole garment is in frame.',
+  too_far: "It's too small in the photo. Move closer so the garment fills most of the frame.",
   obscured: "Something's covering part of it. Lay it flat and shoot from above."
 };
 
@@ -44,7 +45,7 @@ export const GARMENT_SCHEMA = {
       required: ['name', 'slot', 'warmth', 'wind', 'water', 'dressy', 'warmth_basis'],
       properties: {
         name: { type: 'string', description: 'Short, recognisable. Colour plus item: "Navy wool overcoat".' },
-        slot: { type: 'string', enum: SLOTS, description: 'base next to skin, mid over it, outer on top, head, hands, carry.' },
+        slot: { type: 'string', enum: SLOTS, description: 'base next to skin, mid over it, outer on top, head, hands, feet (shoes, boots, socks), carry.' },
         warmth: { type: 'integer', minimum: 0, maximum: 10, description: 'Insulation added, on the anchors given in the prompt.' },
         wind: { type: 'number', minimum: 0, maximum: 1, description: 'How well it blocks wind. 0 none, 1 windproof shell.' },
         water: { type: 'number', minimum: 0, maximum: 1, description: 'How well it keeps rain out. 0 none, 1 waterproof.' },
@@ -89,14 +90,15 @@ export function buildPrompt(wardrobe = []) {
     'You are rating one garment from a photograph so a layering engine can use it.',
     '',
     'Rules:',
-    '1. State only what is visible in the image. Never name a brand, a fibre composition or a care instruction — none of that is reliably readable from a photo.',
+    '1. State only what is visible in the image. Do not guess a brand, a fibre composition or a care instruction. If a label is legible, you may record it in visible_evidence as "label reads …", but keep any brand out of the name, and set warmth from the visible bulk, never from the label.',
     '2. If you cannot identify the garment with confidence, set usable to false and give a reject_reason. Abstaining is a correct answer.',
     '3. visible_evidence must list only things you can actually see. It is checked against the image.',
     '4. Rate warmth on this scale, where these are the reference points' + (useOwn ? " from the user's own wardrobe" : '') + `: ${anchors}.`,
     '5. Set clarify only when one field falls below confidence 0.6, and only for the single least certain field. Otherwise clarify is null.',
     '6. Confidence is per field. Category is usually certain; warmth and water resistance rarely are. Do not report a uniform score.',
     '',
-    'slot: base = next to the skin, mid = worn over a base, outer = worn on top, head, hands, carry.'
+    'slot: base = next to the skin, mid = worn over a base, outer = worn on top, head, hands, feet = shoes, boots or socks, carry = bags and umbrellas.',
+    'Fabric that is not clothing (a blanket, towel, curtain, cushion, rug) is not a garment: set usable to false with no_garment. If the garment is small in a wide frame, use too_far.'
   ].join('\n');
 }
 
@@ -116,7 +118,7 @@ export function normalise(raw) {
     const g = raw.garment;
     out.garment = {
       name: String(g.name || '').trim().slice(0, 60),
-      slot: SLOTS.includes(g.slot) ? g.slot : 'outer',
+      slot: SLOTS.includes(g.slot) ? g.slot : null,
       warmth: Math.round(clampN(g.warmth, 0, 10, 3)),
       wind: clampN(g.wind, 0, 1, 0.2),
       water: clampN(g.water, 0, 1, 0.2),
@@ -135,6 +137,12 @@ export function normalise(raw) {
   }
   // A usable result with no garment is incoherent; treat as a failed read.
   if (out.usable && (!out.garment || !out.confidence)) return null;
+  // An unknown slot used to fall back to 'outer', which saved a shoe as a coat.
+  // Now it is a rejection: no slot means the engine cannot use the item.
+  if (out.garment && !out.garment.slot) {
+    if (out.usable) { out.usable = false; out.reject_reason = 'no_garment'; }
+    out.garment.slot = 'outer'; // placeholder only; a rejected reading is never shown as a form
+  }
   return out;
 }
 
