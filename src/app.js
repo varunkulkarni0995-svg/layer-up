@@ -380,7 +380,7 @@ function renderSettings() {
       <p class="hint" style="font-size:13px;margin:0">${aiReady() ? 'Snap a garment and check what it proposes.' : 'Set up photo reading under “AI for photos” below.'}</p>
       ${ward}</section>
     <section class="card"><div class="eyebrow">AI for photos</div>${aiSection()}</section>
-    <section class="card"><div class="between"><span class="hint">${state.acct.session ? 'Wardrobe synced to your account.' : 'Saved on this device.'}<br><span class="ver">Layer Up ${VERSION}</span></span>
+    <section class="card"><div class="between"><span class="hint">${state.acct.session ? 'Wardrobe synced to your account.' : 'Saved on this device.'}<br><span class="ver">Layer Up ${VERSION} · <a href="privacy.html">Privacy</a></span></span>
       <button type="button" class="link" data-action="reset-all" id="resetAll" style="color:var(--bad)">Reset all</button></div></section>`;
 }
 
@@ -441,7 +441,7 @@ function ownKeySection() {
         ${has ? `<button type="button" class="link" data-action="clear-key" data-p="${p}" style="color:var(--bad)">Clear</button>` : ''}</div>`;
   };
   return row('gemini', 'Gemini key', 'Tried first.') + row('groq', 'Groq key (backup, optional)', 'Used if Gemini fails.') +
-    `<p class="hint" style="font-size:13px;margin:0">Stored in this browser only, and sent only to Google or Groq. <a href="/eval.html">Run the evals →</a></p>`;
+    `<p class="hint" style="font-size:13px;margin:0">Stored in this browser only, and sent only to Google or Groq. <a href="eval.html">Run the evals →</a> · <a href="privacy.html">Privacy</a></p>`;
 }
 
 function serverSection() {

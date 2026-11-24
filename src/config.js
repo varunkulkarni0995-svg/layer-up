@@ -3,8 +3,8 @@
 // enforced by the database rules and the ai-gateway, not by hiding this key.
 export const VERSION = 'v0.3.0';
 export const PLATFORM = {
-  url: '',          // filled in once the Supabase project exists
-  key: '',          // publishable key
+  url: 'https://tzmdhmzonixmemsdepgs.supabase.co',
+  key: 'sb_publishable_D8Zo1MUHasQodigP2p9nyw_ieKEWJq7',   // publishable (safe to be public)
   app: 'layer-up'
 };
 export const platformReady = () => !!(PLATFORM.url && PLATFORM.key);
