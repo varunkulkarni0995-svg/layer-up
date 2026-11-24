@@ -7,7 +7,12 @@ let clientP = null;
 export function client() {
   if (!platformReady()) return Promise.resolve(null);
   if (!clientP) clientP = import('https://esm.sh/@supabase/supabase-js@2.49.1').then(({ createClient }) =>
-    createClient(PLATFORM.url, PLATFORM.key, { auth: { persistSession: true, detectSessionInUrl: true, flowType: 'pkce' } }));
+    createClient(PLATFORM.url, PLATFORM.key, { auth: {
+      persistSession: true, detectSessionInUrl: true, flowType: 'pkce',
+      // Default is a browser-wide lock shared by every tab on this origin. One stuck
+      // tab (v0.3.0's deadlock) then froze sign-in in all the others. Lock per tab only.
+      lock: async (_name, _timeout, fn) => fn()
+    } }));
   return clientP;
 }
 
